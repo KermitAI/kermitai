@@ -1,0 +1,13 @@
+{
+    "author": ["KermitAI"],
+    "description": "AutoTrigger cog that automatically responds to configured keywords with customizable responses. Supports exact matches and wildcards.",
+    "install_msg": "Thanks for installing AutoTrigger! Use `[p]help autotrigger` to see available commands. For support, please visit https://discord.gg/xXqT7gbS5H.",
+    "short": "Automatic responses to configured keywords",
+    "tags": ["trigger", "keywords", "auto", "automation", "response"],
+    "type": "COG",
+    "end_user_data_statement": "This cog stores trigger keywords and responses configured by server administrators. No personal data is stored.",
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "required_cogs": {}
+}
