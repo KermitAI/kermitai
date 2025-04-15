@@ -7,8 +7,6 @@ from redbot.core import commands, Config
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import humanize_list
 
-discord.opus.load_opus("libopus.so")
-
 class TTS(commands.Cog):
     """Text-to-Speech cog for Red-Discordbot"""
 
