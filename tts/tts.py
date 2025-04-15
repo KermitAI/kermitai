@@ -10,7 +10,7 @@ from redbot.core.utils.chat_formatting import humanize_list
 class TTS(commands.Cog):
     """Text-to-Speech cog for Red-Discordbot"""
 
-    discord.opus.load_opus("home/ubuntu/assistant/lib/python3.11/site-packages/discord/bin/libopus-0.x64.dll")
+    discord.opus.load_opus("/home/ubuntu/assistant/lib/python3.11/site-packages/discord/bin/libopus-0.x64.dll")
 
     def __init__(self, bot: Red):
         self.bot = bot
