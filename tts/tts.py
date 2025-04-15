@@ -2,10 +2,12 @@ import asyncio
 import discord
 import io
 import gtts
-import discord.opus
+import logging
 from redbot.core import commands, Config
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import humanize_list
+
+log = logging.getLogger("red.tts")
 
 class TTS(commands.Cog):
     """Text-to-Speech cog for Red-Discordbot"""
@@ -23,6 +25,25 @@ class TTS(commands.Cog):
         
         self.config.register_guild(**default_guild)
         self.voice_states = {}
+        
+        # Try loading opus
+        if not discord.opus.is_loaded():
+            try:
+                # Try loading via system's libopus
+                discord.opus.load_opus('opus')
+                log.info("Loaded opus via 'opus'")
+            except OSError:
+                try:
+                    # Try loading via libopus.so.0
+                    discord.opus.load_opus('libopus.so.0')
+                    log.info("Loaded opus via 'libopus.so.0'")
+                except OSError:
+                    try:
+                        # Try loading via libopus.so
+                        discord.opus.load_opus('libopus.so')
+                        log.info("Loaded opus via 'libopus.so'")
+                    except OSError:
+                        log.warning("Failed to load opus. Voice will not work.")
 
     @commands.group(name="ttsset")
     @commands.guild_only()
@@ -89,6 +110,10 @@ class TTS(commands.Cog):
     @commands.guild_only()
     async def text_to_speech(self, ctx, *, text: str = None):
         """Convert text to speech and play it in your voice channel"""
+        # Check if opus is loaded
+        if not discord.opus.is_loaded():
+            return await ctx.send("Opus library is not loaded. Voice functionality cannot be used. Please contact the bot owner.")
+            
         # Check if TTS is enabled in this guild
         if not await self.config.guild(ctx.guild).enabled():
             return await ctx.send("TTS is disabled in this server.")
@@ -139,13 +164,16 @@ class TTS(commands.Cog):
         if voice_client.is_playing():
             voice_client.stop()
         
-        voice_client.play(audio_source)
-        
-        # Set up a task to disconnect after a period of inactivity
-        if ctx.guild.id in self.voice_states:
-            self.voice_states[ctx.guild.id].cancel()
-        
-        self.voice_states[ctx.guild.id] = asyncio.create_task(self._disconnect_after_inactivity(ctx.guild))
+        try:
+            voice_client.play(audio_source)
+            # Set up a task to disconnect after a period of inactivity
+            if ctx.guild.id in self.voice_states:
+                self.voice_states[ctx.guild.id].cancel()
+            
+            self.voice_states[ctx.guild.id] = asyncio.create_task(self._disconnect_after_inactivity(ctx.guild))
+        except Exception as e:
+            await ctx.send(f"Error playing audio: {str(e)}")
+            log.error(f"Error playing audio: {str(e)}")
     
     async def _disconnect_after_inactivity(self, guild):
         """Disconnect from voice after 2 minutes of inactivity"""
@@ -160,7 +188,7 @@ class TTS(commands.Cog):
         for task in self.voice_states.values():
             task.cancel()
         
-        for guild_id, voice_client in list(self.bot.voice_clients):
+        for voice_client in self.bot.voice_clients:
             asyncio.create_task(voice_client.disconnect(force=True))
 
 async def setup(bot):
