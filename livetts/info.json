@@ -1,0 +1,11 @@
+{
+    "author": ["KermitAI"],
+    "install_msg": "Thanks for installing the TTS cog! Use `[p]tts` to have the bot speak text in your voice channel, and `[p]ttsset` to configure settings.",
+    "name": "TTS",
+    "short": "Text-to-speech functionality for voice channels",
+    "description": "A cog that allows users to have text spoken in voice channels using Google's Text-to-Speech (gTTS) library.",
+    "tags": ["voice", "tts", "audio", "text-to-speech"],
+    "requirements": ["gTTS"],
+    "min_bot_version": "3.5.0",
+    "end_user_data_statement": "This cog does not persistently store any data about users."
+}
