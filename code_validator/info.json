@@ -1,0 +1,11 @@
+{
+    "author": ["KermitAI"],
+    "install_msg": "Thank you for installing the Code Validator cog! Use `[p]validate` to check your code for syntax errors across multiple programming languages.",
+    "name": "CodeValidator",
+    "short": "Validates code syntax for various programming languages",
+    "description": "A cog that validates code syntax across multiple programming languages including Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Ruby, PHP, Rust, Bash, HTML, CSS, Swift, Kotlin, and SQL. Use `[p]validate` followed by your code block to check for syntax errors.",
+    "tags": ["code", "validation", "programming", "developer", "utility"],
+    "min_bot_version": "3.4.0",
+    "end_user_data_statement": "This cog does not persistently store data about users.",
+    "requirements": []
+}
