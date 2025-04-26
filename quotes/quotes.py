@@ -209,23 +209,11 @@ class Quotes(commands.Cog):
         
         quote_message = await channel.send(embed=embed)
         
-        # Add the star reaction - FIXED VERSION
+        # Add the star reaction
         try:
-            # Use the unicode character for star emoji
-            await quote_message.add_reaction("⭐")
-            # If that fails, try with the emoji name
-            if not quote_message.reactions:
-                await asyncio.sleep(0.5)  # Small delay to avoid rate limits
-                await quote_message.add_reaction(":star:")
-        except Exception as e:
-            # Log the error but don't stop execution
-            print(f"Error adding reaction: {e}")
-            # Try one more time with a raw Unicode
-            try:
-                await asyncio.sleep(1)  # Longer delay
-                await quote_message.add_reaction("\u2B50")
-            except Exception:
-                pass  # If this fails too, we continue without the reaction
+            await quote_message.add_reaction(":star:")
+        except discord.HTTPException:
+            pass  # If adding the reaction fails, we'll just continue without it
         
         # If the quote was sent to a different channel, confirm to the user
         if channel != ctx.channel:
