@@ -205,7 +205,7 @@ class Quotes(commands.Cog):
             description=f"{quote_text}\n*~ {quoted_person}*\n",
             color=discord.Color.orange()
         )
-        embed.set_footer(text=f"Submitted by: {ctx.author.display_name}")
+        embed.set_footer(text=f"Submitted by: {ctx.author.mention}")
         
         quote_message = await channel.send(embed=embed)
         
