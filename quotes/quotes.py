@@ -202,7 +202,7 @@ class Quotes(commands.Cog):
         
         # Create and send the embed
         embed = discord.Embed(
-            description=f"## {quote_text}\n### *~ {quoted_person}*\n\n-# Submitted by: {ctx.author.mention}",
+            description=f"### {quote_text}\n*~ {quoted_person}*\n\n-# Submitted by: {ctx.author.mention}",
             color=discord.Color.orange()
         )
         
