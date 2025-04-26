@@ -202,10 +202,10 @@ class Quotes(commands.Cog):
         
         # Create and send the embed
         embed = discord.Embed(
-            description=f"{quote_text}\n*~ {quoted_person}*",
+            description=f"{quote_text}\n*~ {quoted_person}*\n",
             color=discord.Color.orange()
         )
-        embed.set_footer(text=f"-# Submitted by: {ctx.author.display_name}")
+        embed.set_footer(text=f"Submitted by: {ctx.author.display_name}")
         
         quote_message = await channel.send(embed=embed)
         
@@ -216,7 +216,7 @@ class Quotes(commands.Cog):
             # If that fails, try with the emoji name
             if not quote_message.reactions:
                 await asyncio.sleep(0.5)  # Small delay to avoid rate limits
-                await quote_message.add_reaction("star")
+                await quote_message.add_reaction(":star:")
         except Exception as e:
             # Log the error but don't stop execution
             print(f"Error adding reaction: {e}")
