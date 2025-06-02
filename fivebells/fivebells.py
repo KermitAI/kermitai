@@ -1,6 +1,6 @@
 import discord
 from redbot.core import commands, Config
-from redbot.core.utils import schedules
+import asyncio
 import feedparser
 
 RSS_URL = "https://www.iaff.org/feed/lodd"
