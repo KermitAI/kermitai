@@ -3,56 +3,58 @@ import asyncio
 import feedparser
 from redbot.core import commands, Config
 
-RSS_URL = "https://www.iaff.org/feed/lodd"
-
 class fivebells(commands.Cog):
-    """Automatically posts LODD reports for fallen firefighters & EMS personnel"""
+    """Automatically posts RSS updates to different channels"""
 
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=1234567890, force_registration=True)
         default_guild = {
-            "rss_url": RSS_URL,
+            "rss_feeds": {},  # Stores RSS URLs mapped to Discord channels
             "embed_color": discord.Color.red().value,
             "role_tag": None,
             "interval": 60,
-            "last_posted_title": None,
-            "post_channel": None
+            "last_posted_titles": {},  # Track last posted titles per feed
         }
         self.config.register_guild(**default_guild)
-        self.bot.loop.create_task(self.auto_post_task())  # Start background posting task
+        self.bot.loop.create_task(self.auto_post_task())
 
     async def auto_post_task(self):
-        """Background task to fetch and post new LODD reports"""
+        """Background task to fetch and post RSS updates"""
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
                 for guild in self.bot.guilds:
-                    channel_id = await self.config.guild(guild).post_channel()
-                    channel = guild.get_channel(channel_id)
-                    if not channel:
-                        continue
+                    rss_feeds = await self.config.guild(guild).rss_feeds()
+                    last_posted_titles = await self.config.guild(guild).last_posted_titles()
 
-                    feed = feedparser.parse(await self.config.guild(guild).rss_url())
-                    if not feed.entries:
-                        continue
+                    for rss_url, channel_id in rss_feeds.items():
+                        channel = guild.get_channel(channel_id)
+                        if not channel:
+                            continue
 
-                    entry = feed.entries[0]
-                    last_posted = await self.config.guild(guild).last_posted_title()
+                        feed = feedparser.parse(rss_url)
+                        if not feed.entries:
+                            continue
 
-                    if entry.title == last_posted:
-                        continue  # Avoid duplicate posting
+                        entry = feed.entries[0]
+                        last_posted = last_posted_titles.get(rss_url, None)
 
-                    embed = discord.Embed(title=entry.title, url=entry.link, description=entry.summary, color=await self.config.guild(guild).embed_color())
-                    embed.set_footer(text="Honoring the fallen.")
-                    role = await self.config.guild(guild).role_tag()
-                    message = f"{role} New Line of Duty Death Report:" if role else "New Line of Duty Death Report:"
+                        if entry.title == last_posted:
+                            continue  # Avoid duplicate posting
 
-                    await channel.send(message, embed=embed)
-                    await self.config.guild(guild).last_posted_title.set(entry.title)
+                        embed = discord.Embed(title=entry.title, url=entry.link, description=entry.summary, color=await self.config.guild(guild).embed_color())
+                        embed.set_footer(text="Latest RSS Update")
+                        role = await self.config.guild(guild).role_tag()
+                        message = f"{role} New Update:" if role else "New Update:"
+
+                        await channel.send(message, embed=embed)
+                        last_posted_titles[rss_url] = entry.title
+
+                    await self.config.guild(guild).last_posted_titles.set(last_posted_titles)
 
                 interval = await self.config.guild(guild).interval()
-                await asyncio.sleep(interval * 60)  # Convert minutes to seconds
+                await asyncio.sleep(interval * 60)
 
             except Exception as e:
                 print(f"Error in auto_post_task: {e}")
@@ -61,40 +63,52 @@ class fivebells(commands.Cog):
     async def fivebells(self, ctx):
         """Base command for managing the FiveBells cog"""
         if ctx.invoked_subcommand is None:
-            await ctx.send("Available subcommands: `setchannel`, `setinterval`, `getlastpost`, `setcolor`, `setrole`.")
+            await ctx.send("Available subcommands: `addfeed`, `removefeed`, `listfeeds`, `setinterval`, `setcolor`, `setrole`.")
 
     @fivebells.command()
-    async def setchannel(self, ctx, channel: discord.TextChannel):
-        """Sets the channel for automatic postings"""
-        await self.config.guild(ctx.guild).post_channel.set(channel.id)
-        await ctx.send(f"LODD reports will now be posted in {channel.mention}.")
+    async def addfeed(self, ctx, rss_url: str, channel: discord.TextChannel):
+        """Adds an RSS feed and assigns it to a Discord channel"""
+        rss_feeds = await self.config.guild(ctx.guild).rss_feeds()
+        if rss_url in rss_feeds:
+            await ctx.send("This RSS feed is already assigned to a channel.")
+            return
+        
+        rss_feeds[rss_url] = channel.id
+        await self.config.guild(ctx.guild).rss_feeds.set(rss_feeds)
+        await ctx.send(f"RSS feed `{rss_url}` added for `{channel.mention}`.")
+
+    @fivebells.command()
+    async def removefeed(self, ctx, rss_url: str):
+        """Removes an RSS feed"""
+        rss_feeds = await self.config.guild(ctx.guild).rss_feeds()
+        if rss_url not in rss_feeds:
+            await ctx.send("This RSS feed is not currently being tracked.")
+            return
+        
+        del rss_feeds[rss_url]
+        await self.config.guild(ctx.guild).rss_feeds.set(rss_feeds)
+        await ctx.send(f"RSS feed `{rss_url}` removed.")
+
+    @fivebells.command()
+    async def listfeeds(self, ctx):
+        """Lists all stored RSS feeds and their assigned channels"""
+        rss_feeds = await self.config.guild(ctx.guild).rss_feeds()
+        if not rss_feeds:
+            await ctx.send("No RSS feeds are currently stored.")
+            return
+
+        feed_list = "\n".join([f"`{url}` → <#{channel_id}>" for url, channel_id in rss_feeds.items()])
+        await ctx.send(f"Tracked RSS feeds:\n{feed_list}")
 
     @fivebells.command()
     async def setinterval(self, ctx, minutes: int):
-        """Sets how often the bot fetches new LODD reports"""
+        """Sets how often the bot fetches new RSS updates"""
         if minutes < 5:
             await ctx.send("Interval must be at least 5 minutes.")
             return
         
         await self.config.guild(ctx.guild).interval.set(minutes)
         await ctx.send(f"Automatic updates set to every {minutes} minutes.")
-
-    @fivebells.command()
-    async def getlastpost(self, ctx):
-        """Manually fetches and posts the most recent LODD report"""
-        feed = feedparser.parse(await self.config.guild(ctx.guild).rss_url())
-        if not feed.entries:
-            await ctx.send("No new LODD reports found.")
-            return
-
-        entry = feed.entries[0]
-        embed = discord.Embed(title=entry.title, url=entry.link, description=entry.summary, color=await self.config.guild(ctx.guild).embed_color())
-        embed.set_footer(text="Honoring the fallen.")
-        role = await self.config.guild(ctx.guild).role_tag()
-        message = f"{role} Latest Line of Duty Death Report:" if role else "Latest Line of Duty Death Report:"
-        
-        await ctx.send(message, embed=embed)
-        await self.config.guild(ctx.guild).last_posted_title.set(entry.title)
 
     @fivebells.command()
     async def setcolor(self, ctx, color: discord.Color):
@@ -104,7 +118,7 @@ class fivebells(commands.Cog):
 
     @fivebells.command()
     async def setrole(self, ctx, role: discord.Role):
-        """Sets a role to tag when posting LODD reports"""
+        """Sets a role to tag when posting RSS updates"""
         await self.config.guild(ctx.guild).role_tag.set(role.mention)
         await ctx.send(f"Role tag set to {role.mention}")
 
