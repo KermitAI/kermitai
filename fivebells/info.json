@@ -1,0 +1,9 @@
+{
+    "name": "fivebells",
+    "author": ["KermitAI"],
+    "description": "Posts LODD reports for fallen American and Canadian firefighters & EMS personnel.",
+    "install_msg": "Thank you for installing fivebells! Use `[p]help fivebells` for available commands.",
+    "short": "LODD report postings.",
+    "requirements": ["feedparser"],
+    "tags": ["RSS", "Firefighters", "LODD", "EMS"]
+}
