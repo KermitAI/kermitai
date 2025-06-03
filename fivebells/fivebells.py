@@ -44,9 +44,9 @@ class fivebells(commands.Cog):
                             continue  # Avoid duplicate posting
 
                         embed = discord.Embed(title=entry.title, url=entry.link, description=entry.summary, color=await self.config.guild(guild).embed_color())
-                        embed.set_footer(text="Latest RSS Update")
+                        embed.set_footer(text="Latest Update")
                         role = await self.config.guild(guild).role_tag()
-                        message = f"{role} New Update:" if role else "New Update:"
+                        message = f"{role}" if role else ""
 
                         await channel.send(message, embed=embed)
                         last_posted_titles[rss_url] = entry.title
