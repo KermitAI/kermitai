@@ -43,7 +43,23 @@ class fivebells(commands.Cog):
                         if entry.title == last_posted:
                             continue  # Avoid duplicate posting
 
-                        embed = discord.Embed(title=entry.title, url=entry.link, description=entry.summary, color=await self.config.guild(guild).embed_color())
+                        embed = discord.Embed(
+                            title=entry.title,
+                            url=entry.link,
+                            description=entry.summary,
+                            color=await self.config.guild(guild).embed_color()
+                        )
+                        # Try to set thumbnail from entry.media_thumbnail or entry.media_content or entry.image
+                        thumbnail_url = None
+                        if hasattr(entry, "media_thumbnail") and entry.media_thumbnail:
+                            thumbnail_url = entry.media_thumbnail[0].get("url")
+                        elif hasattr(entry, "media_content") and entry.media_content:
+                            thumbnail_url = entry.media_content[0].get("url")
+                        elif hasattr(entry, "image") and entry.image:
+                            # Some feeds use entry.image.href or entry.image.url
+                            thumbnail_url = getattr(entry.image, "href", None) or getattr(entry.image, "url", None)
+                        if thumbnail_url:
+                            embed.set_thumbnail(url=thumbnail_url)
                         embed.set_footer(text="Latest Update")
                         role = await self.config.guild(guild).role_tag()
                         message = f"{role}" if role else ""
@@ -121,6 +137,55 @@ class fivebells(commands.Cog):
         """Sets a role to tag when posting RSS updates"""
         await self.config.guild(ctx.guild).role_tag.set(role.mention)
         await ctx.send(f"Role tag set to {role.mention}")
+    
+    @fivebells.command()
+    async def forcepost(self, ctx, rss_url: str):
+        """Forces a post from the specified RSS feed"""
+        rss_feeds = await self.config.guild(ctx.guild).rss_feeds()
+        if rss_url not in rss_feeds:
+            await ctx.send("This RSS feed is not currently being tracked.")
+            return
+        
+        channel_id = rss_feeds[rss_url]
+        channel = ctx.guild.get_channel(channel_id)
+        if not channel:
+            await ctx.send("The channel for this RSS feed no longer exists.")
+            return
+        
+        feed = feedparser.parse(rss_url)
+        if not feed.entries:
+            await ctx.send("No new entries found in the RSS feed.")
+            return
+        
+        entry = feed.entries[0]
+        embed = discord.Embed(
+            title=entry.title,
+            url=entry.link,
+            description=entry.summary,
+            color=await self.config.guild(ctx.guild).embed_color()
+        )
+        
+        thumbnail_url = None
+        if hasattr(entry, "media_thumbnail") and entry.media_thumbnail:
+            thumbnail_url = entry.media_thumbnail[0].get("url")
+        elif hasattr(entry, "media_content") and entry.media_content:
+            thumbnail_url = entry.media_content[0].get("url")
+        elif hasattr(entry, "image") and entry.image:
+            thumbnail_url = getattr(entry.image, "href", None) or getattr(entry.image, "url", None)
+        
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
+        
+        embed.set_footer(text="Latest Update")
+        role = await self.config.guild(ctx.guild).role_tag()
+        message = f"{role}" if role else ""
+        
+        await channel.send(message, embed=embed)
+        last_posted_titles = await self.config.guild(ctx.guild).last_posted_titles()
+        last_posted_titles[rss_url] = entry.title
+        await self.config.guild(ctx.guild).last_posted_titles.set(last_posted_titles)
+        
+        await ctx.send(f"Forced post from `{rss_url}` to {channel.mention}.")
 
 def setup(bot):
     bot.add_cog(fivebells(bot))
