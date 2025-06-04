@@ -79,7 +79,7 @@ class fivebells(commands.Cog):
     async def fivebells(self, ctx):
         """Base command for managing the FiveBells cog"""
         if ctx.invoked_subcommand is None:
-            await ctx.send("")
+            await ctx.send("Commands as follows:")
 
     @fivebells.command()
     async def addfeed(self, ctx, rss_url: str, channel: discord.TextChannel):
