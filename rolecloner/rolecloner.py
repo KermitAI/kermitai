@@ -7,7 +7,7 @@ class rolecloner(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command()
+    @commands.command(name="clone_role", aliases=["roleclone"])
     async def clone_role(self, ctx, role: discord.Role):
         """Clone a role, including its permissions, name, and color"""
         try:
