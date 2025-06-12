@@ -1,0 +1,9 @@
+{
+    "name": "rolecloner",
+    "author": ["KermitAI"],
+    "description": "A cog to clone roles, including their permissions, name, and color.",
+    "install_msg": "Thanks for installing rolecloner! Use `[p]clone_role <role>` to duplicate a role.",
+    "requirements": [],
+    "tags": ["roles", "utility"],
+    "min_bot_version": "3.5.0"
+}
