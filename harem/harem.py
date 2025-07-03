@@ -200,8 +200,8 @@ class harem(commands.Cog):
             
             status = "✅ Available" if char["claimed_by"] is None else "❌ Claimed"
             embed.add_field(
-                name=f"{emoji} {char['name']} ({char['rarity'].title()})",
-                value=f"**Anime:** {char['anime']}\n**Class:** {char.get('class', 'N/A')}\n**Status:** {status}",
+                name=f"{emoji} {char['name']}",
+                value=f"**Anime:** {char['anime']}\n**Class:** {char.get('rarity', 'N/A')}\n**Status:** {status}",
                 inline=True
             )
         
@@ -416,8 +416,8 @@ class harem(commands.Cog):
             for char_id, char in page_chars:
                 status = "💍 Married" if char["married_to"] == user.id else "💖 Owned"
                 embed.add_field(
-                    name=f"{char['name']} ({char['rarity'].title()})",
-                    value=f"**Anime:** {char['anime']}\n**Class:** {char.get('class', 'N/A')}\n**Status:** {status}",
+                    name=f"{char['name']}",
+                    value=f"**Anime:** {char['anime']}\n**Class:** {char.get('rarity', 'N/A')}\n**Status:** {status}",
                     inline=True
                 )
             
@@ -449,8 +449,8 @@ class harem(commands.Cog):
         for char_id, char in results:
             status = "❌ Claimed" if char["claimed_by"] else "✅ Available"
             embed.add_field(
-                name=f"{char['name']} ({char['rarity'].title()})",
-                value=f"**Anime:** {char['anime']}**Class:** {char.get('class', 'N/A')}\n**Status:** {status}",
+                name=f"{char['name']}",
+                value=f"**Anime:** {char['anime']}**Class:** {char.get('rarity', 'N/A')}\n**Status:** {status}",
                 inline=True
             )
         
