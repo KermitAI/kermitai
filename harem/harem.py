@@ -12,7 +12,7 @@ from typing import Optional, Dict, List, Any
 import aiohttp
 
 # Import our character database module
-from .characters import CHARACTERS
+from .characters import CharacterDatabase
 
 class harem(commands.Cog):
     """A character collection and marriage system."""
@@ -50,7 +50,7 @@ class harem(commands.Cog):
         self.config.register_user(**default_user)
         
         # Initialize character database
-        self.character_db = CHARACTERS()
+        self.character_db = CharacterDatabase()
         
         # Active rolls tracking
         self.active_rolls = {}
