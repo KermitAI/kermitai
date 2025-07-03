@@ -95,10 +95,10 @@ class harem(commands.Cog):
     def get_rarity_color(self, rarity):
         """Get color for rarity"""
         colors = {
-            "common": 0x95A5A6,
-            "rare": 0x3498DB,
-            "epic": 0x9B59B6,
-            "legendary": 0xF1C40F
+            "Common": 0x95A5A6,
+            "Rare": 0x3498DB,
+            "Epic": 0x9B59B6,
+            "Legendary": 0xF1C40F
         }
         return colors.get(rarity.lower(), 0x95A5A6)
     
@@ -118,11 +118,11 @@ class harem(commands.Cog):
         weights = []
         for char_id, char in available:
             rarity = char["rarity"]
-            if rarity == "legendary":
+            if rarity == "Legendary":
                 weights.append(1)
-            elif rarity == "epic":
+            elif rarity == "Epic":
                 weights.append(2)
-            elif rarity == "rare":
+            elif rarity == "Rare":
                 weights.append(3)
             else:  # common
                 weights.append(4)
@@ -397,7 +397,7 @@ class harem(commands.Cog):
             return
         
         # Sort by rarity then by name
-        rarity_order = {"legendary": 0, "epic": 1, "rare": 2, "common": 3}
+        rarity_order = {"Legendary": 0, "Epic": 1, "Rare": 2, "Common": 3}
         chars_data.sort(key=lambda x: (rarity_order.get(x[1]["rarity"], 4), x[1]["name"]))
         
         # Create embed pages
@@ -823,8 +823,8 @@ class harem(commands.Cog):
             await ctx.send("❌ Gender must be 'male' or 'female'")
             return
         
-        if rarity.lower() not in ["common", "rare", "epic", "legendary"]:
-            await ctx.send("❌ Rarity must be: common, rare, epic, or legendary")
+        if rarity.lower() not in ["Common", "Rare", "Epic", "Legendary"]:
+            await ctx.send("❌ Rarity must be: Common, Rare, Epic, or Legendary")
             return
         
         char_id = self.character_db.add_character(name, anime, gender.lower(), rarity.lower(), image_url)
