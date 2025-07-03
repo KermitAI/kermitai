@@ -417,7 +417,7 @@ class harem(commands.Cog):
                 status = "💍 Married" if char["married_to"] == user.id else "💖 Owned"
                 embed.add_field(
                     name=f"{char['name']} ({char['rarity'].title()})",
-                    value=f"**Anime:** {char['anime']}**Class:** {char.get("class", "N/A")}\n**Status:** {status}",
+                    value=f"**Anime:** {char['anime']}\n**Class:** {char.get('class', 'N/A')}\n**Status:** {status}",
                     inline=True
                 )
             
