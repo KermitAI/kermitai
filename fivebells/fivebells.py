@@ -99,10 +99,21 @@ class fivebells(commands.Cog):
     @commands.group(aliases=["fb", "bells"])
     async def fivebells(self, ctx):
         if ctx.invoked_subcommand is None:
-            await ctx.send("Commands as follows:")
+            cmds = [
+                ("addfeed", "Adds an RSS feed and assigns it to a Discord channel."),
+                ("removefeed", "Removes a tracked RSS feed."),
+                ("listfeeds", "Lists all stored RSS feeds and their assigned channels."),
+                ("setinterval", "Sets how often the bot fetches new RSS updates (in minutes)."),
+                ("setcolor", "Sets the embed color for posts."),
+                ("setrole", "Sets a role to tag when posting RSS updates."),
+                ("forcepost", "Forces a post from the specified RSS feed immediately.")
+            ]
+            msg = "Available commands:\n" + "\n".join([f"**{name}** - {desc}" for name, desc in cmds])
+            await ctx.send(msg)
 
     @fivebells.command()
     async def addfeed(self, ctx, rss_url: str, channel: discord.TextChannel):
+        """Adds an RSS feed and assigns it to a Discord channel."""
         rss_feeds = await self.config.guild(ctx.guild).rss_feeds()
         if rss_url in rss_feeds:
             await ctx.send("This RSS feed is already assigned to a channel.")
@@ -113,28 +124,33 @@ class fivebells(commands.Cog):
         await ctx.send(f"RSS feed `{rss_url}` added for `{channel.mention}`.")
 
     @fivebells.command()
-    async def removefeed(self, ctx, rss_url: str):
+    async def removefeed(self, ctx, index: int):
+        """Removes a tracked RSS feed by its index."""
         rss_feeds = await self.config.guild(ctx.guild).rss_feeds()
-        if rss_url not in rss_feeds:
-            await ctx.send("This RSS feed is not currently being tracked.")
+        rss_list = list(rss_feeds.items())
+        if index < 1 or index > len(rss_list):
+            await ctx.send("Invalid index.")
             return
 
+        rss_url, _ = rss_list[index - 1]
         del rss_feeds[rss_url]
         await self.config.guild(ctx.guild).rss_feeds.set(rss_feeds)
         await ctx.send(f"RSS feed `{rss_url}` removed.")
 
     @fivebells.command()
     async def listfeeds(self, ctx):
+        """Lists all stored RSS feeds and their assigned channels."""
         rss_feeds = await self.config.guild(ctx.guild).rss_feeds()
         if not rss_feeds:
             await ctx.send("No RSS feeds are currently stored.")
             return
 
-        feed_list = "\n".join([f"`{url}` → <#{channel_id}>" for url, channel_id in rss_feeds.items()])
+        feed_list = "\n".join([f"**{i+1}.** `{url}` → <#{channel_id}>" for i, (url, channel_id) in enumerate(rss_feeds.items())])
         await ctx.send(f"Tracked RSS feeds:\n{feed_list}")
 
     @fivebells.command()
     async def setinterval(self, ctx, minutes: int):
+        """Sets how often the bot fetches new RSS updates (in minutes)."""
         if minutes < 5:
             await ctx.send("Interval must be at least 5 minutes.")
             return
@@ -144,22 +160,26 @@ class fivebells(commands.Cog):
 
     @fivebells.command()
     async def setcolor(self, ctx, color: discord.Color):
+        """Sets the embed color for posts."""
         await self.config.guild(ctx.guild).embed_color.set(color.value)
         await ctx.send(f"Embed color updated.")
 
     @fivebells.command()
     async def setrole(self, ctx, role: discord.Role):
+        """Sets a role to tag when posting RSS updates."""
         await self.config.guild(ctx.guild).role_tag.set(role.mention)
         await ctx.send(f"Role tag set to {role.mention}")
 
     @fivebells.command()
-    async def forcepost(self, ctx, rss_url: str):
+    async def forcepost(self, ctx, index: int):
+        """Forces a post from the specified RSS feed by index."""
         rss_feeds = await self.config.guild(ctx.guild).rss_feeds()
-        if rss_url not in rss_feeds:
-            await ctx.send("This RSS feed is not currently being tracked.")
+        rss_list = list(rss_feeds.items())
+        if index < 1 or index > len(rss_list):
+            await ctx.send("Invalid index.")
             return
 
-        channel_id = rss_feeds[rss_url]
+        rss_url, channel_id = rss_list[index - 1]
         channel = ctx.guild.get_channel(channel_id)
         if not channel:
             await ctx.send("The channel for this RSS feed no longer exists.")
