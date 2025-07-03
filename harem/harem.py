@@ -201,8 +201,7 @@ class harem(commands.Cog):
             status = "✅ Available" if char["claimed_by"] is None else "❌ Claimed"
             embed.add_field(
                 name=f"{emoji} {char['name']} ({char['rarity'].title()})",
-                value=f"**Anime:** {char['anime']}
-**Class:** {char.get("class", "N/A")}\n**Status:** {status}",
+                value=f"**Anime:** {char['anime']}\n**Class:** {char.get('class', 'N/A')}\n**Status:** {status}",
                 inline=True
             )
         
