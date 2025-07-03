@@ -1,0 +1,13 @@
+{
+    "name": "Harem",
+    "short": "Character collection and marriage system",
+    "description": "Paimon's Harem - A comprehensive character collection and marriage system for Discord servers. Features character rolling, claiming, marriage system, wishlists, and detailed statistics.",
+    "author": ["KermitAI"],
+    "min_bot_version": "3.4.0",
+    "dependencies": ["bank"],
+    "requirements": ["aiohttp"],
+    "tags": ["game", "collection", "marriage", "characters", "gacha"],
+    "type": "COG",
+    "install_msg": "Thank you for installing Paimon's Harem! Use `[p]harem` to get started. Don't forget to set up your character database and configure settings with `[p]harem admin`.",
+    "end_user_data_statement": "This cog stores user data including character collections, marriages, wishlists, and rolling statistics. Users can request deletion of their data by contacting the bot owner."
+}
