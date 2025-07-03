@@ -30,7 +30,8 @@ class harem(commands.Cog):
             "cooldown_hours": 2,
             "enabled": True,
             "ping_wishlist": True,
-            "max_marriages": 50
+            "max_marriages": 50,
+            "extra_rolls_roles": {}
         }
         
         # User settings
@@ -164,7 +165,17 @@ class harem(commands.Cog):
             return
         
         # Roll characters
-        rolled_chars = await self.roll_characters(gender)
+        
+        # Extra rolls based on role bonuses
+        roles = ctx.author.roles
+        extra = 0
+        role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
+        for role in roles:
+            if str(role.id) in role_bonuses:
+                extra = max(extra, role_bonuses[str(role.id)])
+        total_rolls = 1 + extra
+        rolled_chars = await self.roll_characters(gender, count=total_rolls)
+
         if not rolled_chars:
             await ctx.send("❌ No characters available to roll!")
             return
@@ -190,7 +201,8 @@ class harem(commands.Cog):
             status = "✅ Available" if char["claimed_by"] is None else "❌ Claimed"
             embed.add_field(
                 name=f"{emoji} {char['name']} ({char['rarity'].title()})",
-                value=f"**Anime:** {char['anime']}\n**Status:** {status}",
+                value=f"**Anime:** {char['anime']}
+**Class:** {char.get("class", "N/A")}\n**Status:** {status}",
                 inline=True
             )
         
@@ -406,7 +418,8 @@ class harem(commands.Cog):
                 status = "💍 Married" if char["married_to"] == user.id else "💖 Owned"
                 embed.add_field(
                     name=f"{char['name']} ({char['rarity'].title()})",
-                    value=f"**Anime:** {char['anime']}\n**Status:** {status}",
+                    value=f"**Anime:** {char['anime']}
+**Class:** {char.get("class", "N/A")}\n**Status:** {status}",
                     inline=True
                 )
             
@@ -439,7 +452,8 @@ class harem(commands.Cog):
             status = "❌ Claimed" if char["claimed_by"] else "✅ Available"
             embed.add_field(
                 name=f"{char['name']} ({char['rarity'].title()})",
-                value=f"**Anime:** {char['anime']}\n**Status:** {status}",
+                value=f"**Anime:** {char['anime']}
+**Class:** {char.get("class", "N/A")}\n**Status:** {status}",
                 inline=True
             )
         
@@ -779,6 +793,16 @@ class harem(commands.Cog):
         await self.config.guild(ctx.guild).set_raw(cost_key, value=amount)
         await ctx.send(f"✅ {cost_type.title()} cost set to {amount:,}")
     
+    
+    @harem_admin.command(name="setextrarolls")
+    async def admin_set_extra_rolls(self, ctx, role: discord.Role, rolls: int):
+        """Set extra roll count for a role"""
+        data = await self.config.guild(ctx.guild).extra_rolls_roles()
+        data[str(role.id)] = rolls
+        await self.config.guild(ctx.guild).extra_rolls_roles.set(data)
+        await ctx.send(f"✅ {role.name} now grants {rolls} extra roll(s).")
+
+
     @harem_admin.command(name="setcooldown")
     async def admin_set_cooldown(self, ctx, hours: int):
         """Set cooldown between rolls (in hours)"""
@@ -854,3 +878,21 @@ class harem(commands.Cog):
             await ctx.send("✅ Character database reloaded successfully!")
         except Exception as e:
             await ctx.send(f"❌ Failed to reload database: {e}")
+    @harem_admin.command(name="resetcooldown")
+    async def admin_reset_cooldown(self, ctx, target: str, member: Optional[discord.Member] = None):
+        """Reset cooldowns: global or user"""
+        if target.lower() == "global":
+            all_users = await self.config.all_users()
+            for user_id in all_users:
+                await self.config.user_from_id(user_id).last_roll.set(None)
+            await ctx.send("✅ Global cooldown reset.")
+        
+        elif target.lower() == "user":
+            if not member:
+                await ctx.send("❌ Please specify a user.")
+                return
+            await self.config.user(member).last_roll.set(None)
+            await ctx.send(f"✅ Cooldown reset for {member.display_name}.")
+        
+        else:
+            await ctx.send("❌ Invalid option. Use `global` or `user`.")
