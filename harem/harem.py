@@ -201,7 +201,7 @@ class harem(commands.Cog):
             return
         
         # Calculate total rolls including extra rolls from roles
-        base_rolls = 1
+        base_rolls = 10  # Default 10 characters per roll
         extra_rolls = 0
         
         # Get role bonuses from config
