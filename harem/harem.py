@@ -129,21 +129,23 @@ class harem(commands.Cog):
         
         # Weighted selection without replacement
         selected = []
-        chars_with_weights = list(zip(available, weights))
+        available_indices = list(range(len(available)))
         
-        for _ in range(min(count, len(chars_with_weights))):
-            if not chars_with_weights:
+        for _ in range(min(count, len(available))):
+            if not available_indices:
                 break
             
-            # Extract current characters and weights
-            current_chars, current_weights = zip(*chars_with_weights)
+            # Get current weights for remaining indices
+            current_weights = [weights[i] for i in available_indices]
             
-            # Select one character
-            chosen_char = random.choices(current_chars, weights=current_weights, k=1)[0]
-            selected.append(chosen_char)
+            # Select one index
+            chosen_index = random.choices(available_indices, weights=current_weights, k=1)[0]
             
-            # Remove the chosen character from the pool
-            chars_with_weights = [item for item in chars_with_weights if item[0] != chosen_char]
+            # Add the character at that index to selected
+            selected.append(available[chosen_index])
+            
+            # Remove the chosen index from available indices
+            available_indices.remove(chosen_index)
         
         return selected
     
