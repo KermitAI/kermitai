@@ -114,6 +114,10 @@ class harem(commands.Cog):
         if not available:
             return []
         
+        # If we have fewer characters than requested, just return all available
+        if len(available) <= count:
+            return available
+        
         # Weight by rarity (legendary = 1, epic = 2, rare = 3, common = 4)
         weights = []
         for char_id, char in available:
@@ -127,25 +131,33 @@ class harem(commands.Cog):
             else:  # common
                 weights.append(4)
         
-        # Weighted selection without replacement
+        # Simple approach: shuffle with weights and take first N
         selected = []
-        available_indices = list(range(len(available)))
+        available_copy = available.copy()
         
-        for _ in range(min(count, len(available))):
-            if not available_indices:
+        for _ in range(count):
+            if not available_copy:
                 break
             
-            # Get current weights for remaining indices
-            current_weights = [weights[i] for i in available_indices]
+            # Create weights for remaining characters
+            current_weights = []
+            for char_id, char in available_copy:
+                rarity = char["rarity"]
+                if rarity == "Legendary":
+                    current_weights.append(1)
+                elif rarity == "Epic":
+                    current_weights.append(2)
+                elif rarity == "Rare":
+                    current_weights.append(3)
+                else:  # common
+                    current_weights.append(4)
             
-            # Select one index
-            chosen_index = random.choices(available_indices, weights=current_weights, k=1)[0]
+            # Select one character
+            chosen_char = random.choices(available_copy, weights=current_weights, k=1)[0]
+            selected.append(chosen_char)
             
-            # Add the character at that index to selected
-            selected.append(available[chosen_index])
-            
-            # Remove the chosen index from available indices
-            available_indices.remove(chosen_index)
+            # Remove from available
+            available_copy.remove(chosen_char)
         
         return selected
     
