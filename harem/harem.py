@@ -127,7 +127,24 @@ class harem(commands.Cog):
             else:  # common
                 weights.append(4)
         
-        selected = random.choices(available, weights=weights, k=min(count, len(available)))
+        # Weighted selection without replacement
+        selected = []
+        chars_with_weights = list(zip(available, weights))
+        
+        for _ in range(min(count, len(chars_with_weights))):
+            if not chars_with_weights:
+                break
+            
+            # Extract current characters and weights
+            current_chars, current_weights = zip(*chars_with_weights)
+            
+            # Select one character
+            chosen_char = random.choices(current_chars, weights=current_weights, k=1)[0]
+            selected.append(chosen_char)
+            
+            # Remove the chosen character from the pool
+            chars_with_weights = [item for item in chars_with_weights if item[0] != chosen_char]
+        
         return selected
     
     @commands.group(name="harem", aliases=["h"])
