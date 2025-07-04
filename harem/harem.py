@@ -207,11 +207,6 @@ class harem(commands.Cog):
         # Get role bonuses from config
         role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
 
-        # Add this at the beginning of roll_characters_command method
-        print(f"Requesting {total_rolls} characters")
-        rolled_chars = await self.roll_characters(gender, count=total_rolls)
-        print(f"Got {len(rolled_chars)} characters back")
-
         # Debug: Print role bonuses and user roles
         print(f"Role bonuses config: {role_bonuses}")
         print(f"User roles: {[f'{role.name} ({role.id})' for role in ctx.author.roles]}")
@@ -229,8 +224,10 @@ class harem(commands.Cog):
         # Debug: Print final calculation
         print(f"Final calculation: base_rolls={base_rolls}, extra_rolls={extra_rolls}, total_rolls={total_rolls}")
         
-        # Roll characters with the correct total count
+        # Now we can use total_rolls safely
+        print(f"Requesting {total_rolls} characters")
         rolled_chars = await self.roll_characters(gender, count=total_rolls)
+        print(f"Got {len(rolled_chars)} characters back")
 
         if not rolled_chars:
             await ctx.send("❌ No characters available to roll!")
