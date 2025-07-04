@@ -183,12 +183,6 @@ class harem(commands.Cog):
         await self.roll_characters_command(ctx, None)
     
     async def roll_characters_command(self, ctx, gender):
-        # Add this at the beginning of roll_characters_command method
-        print(f"Requesting {total_rolls} characters")
-        rolled_chars = await self.roll_characters(gender, count=total_rolls)
-        print(f"Got {len(rolled_chars)} characters back")
-
-        
         """Handle character rolling"""
         if not await self.config.guild(ctx.guild).enabled():
             await ctx.send("❌ Paimon's Harem is disabled in this server.")
@@ -212,7 +206,12 @@ class harem(commands.Cog):
         
         # Get role bonuses from config
         role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
-        
+
+        # Add this at the beginning of roll_characters_command method
+        print(f"Requesting {total_rolls} characters")
+        rolled_chars = await self.roll_characters(gender, count=total_rolls)
+        print(f"Got {len(rolled_chars)} characters back")
+
         # Debug: Print role bonuses and user roles
         print(f"Role bonuses config: {role_bonuses}")
         print(f"User roles: {[f'{role.name} ({role.id})' for role in ctx.author.roles]}")
