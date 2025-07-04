@@ -156,7 +156,7 @@ class harem(commands.Cog):
         if not await self.config.guild(ctx.guild).enabled():
             await ctx.send("❌ Paimon's Harem is disabled in this server.")
             return
-    
+        
         if await self.is_on_cooldown(ctx.author):
             remaining = await self.get_cooldown_remaining(ctx.author)
             # Updated to handle both minutes and hours
@@ -167,19 +167,22 @@ class harem(commands.Cog):
                 await ctx.send(f"❄️ You're on cooldown! Try again in {hours}h {minutes}m")
             else:
                 await ctx.send(f"❄️ You're on cooldown! Try again in {total_minutes}m")
-                return
+            return
         
-            # Calculate total rolls including extra rolls from roles
-            base_rolls = 1
-            extra_rolls = 0
-            role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
+        # Calculate total rolls including extra rolls from roles
+        base_rolls = 1
+        extra_rolls = 0
         
+        # Get role bonuses from config FIRST
+        role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
+        
+        # Check user's roles for bonuses
         for role in ctx.author.roles:
             if str(role.id) in role_bonuses:
                 extra_rolls = max(extra_rolls, role_bonuses[str(role.id)])
         
         total_rolls = base_rolls + extra_rolls
-    
+        
         # Roll characters with the correct total count
         rolled_chars = await self.roll_characters(gender, count=total_rolls)
 
@@ -193,7 +196,7 @@ class harem(commands.Cog):
             description=f"React to any character to claim them!\n**Total Rolls:** {total_rolls} (Base: {base_rolls} + Extra: {extra_rolls})\n\n",
             color=0x00ff00
         )
-    
+        
         # Add characters to embed
         reactions = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
         char_mapping = {}
