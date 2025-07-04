@@ -27,7 +27,7 @@ class harem(commands.Cog):
             "marriage_cost": 10000,
             "divorce_cost": 5000,
             "trade_cost": 1000,
-            "cooldown_hours": 2,
+            "cooldown_minutes": 1,
             "enabled": True,
             "ping_wishlist": True,
             "max_marriages": 50,
@@ -73,23 +73,23 @@ class harem(commands.Cog):
         last_roll = await self.config.user(user).last_roll()
         if not last_roll:
             return False
-        
-        cooldown_hours = await self.config.guild(user.guild).cooldown_hours()
+    
+        cooldown_minutes = await self.config.guild(user.guild).cooldown_minutes()
         last_roll_time = datetime.fromisoformat(last_roll)
-        cooldown_end = last_roll_time + timedelta(hours=cooldown_hours)
+        cooldown_end = last_roll_time + timedelta(minutes=cooldown_minutes)
         
         return datetime.now() < cooldown_end
-    
+
     async def get_cooldown_remaining(self, user):
         """Get remaining cooldown time"""
         last_roll = await self.config.user(user).last_roll()
         if not last_roll:
             return timedelta(0)
-        
-        cooldown_hours = await self.config.guild(user.guild).cooldown_hours()
+    
+        cooldown_minutes = await self.config.guild(user.guild).cooldown_minutes()
         last_roll_time = datetime.fromisoformat(last_roll)
-        cooldown_end = last_roll_time + timedelta(hours=cooldown_hours)
-        
+        cooldown_end = last_roll_time + timedelta(minutes=cooldown_minutes)
+    
         return cooldown_end - datetime.now()
     
     def get_rarity_color(self, rarity):
@@ -156,24 +156,31 @@ class harem(commands.Cog):
         if not await self.config.guild(ctx.guild).enabled():
             await ctx.send("❌ Paimon's Harem is disabled in this server.")
             return
-        
+    
         if await self.is_on_cooldown(ctx.author):
             remaining = await self.get_cooldown_remaining(ctx.author)
-            hours = int(remaining.total_seconds() // 3600)
-            minutes = int((remaining.total_seconds() % 3600) // 60)
-            await ctx.send(f"❄️ You're on cooldown! Try again in {hours}h {minutes}m")
-            return
+            # Updated to handle both minutes and hours
+            total_minutes = int(remaining.total_seconds() // 60)
+            if total_minutes >= 60:
+                hours = total_minutes // 60
+                minutes = total_minutes % 60
+                await ctx.send(f"❄️ You're on cooldown! Try again in {hours}h {minutes}m")
+            else:
+                await ctx.send(f"❄️ You're on cooldown! Try again in {total_minutes}m")
+                return
         
-        # Roll characters
+            # Calculate total rolls including extra rolls from roles
+            base_rolls = 1
+            extra_rolls = 0
+            role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
         
-        # Extra rolls based on role bonuses
-        roles = ctx.author.roles
-        extra = 0
-        role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
-        for role in roles:
+        for role in ctx.author.roles:
             if str(role.id) in role_bonuses:
-                extra = max(extra, role_bonuses[str(role.id)])
-        total_rolls = 1 + extra
+                extra_rolls = max(extra_rolls, role_bonuses[str(role.id)])
+        
+        total_rolls = base_rolls + extra_rolls
+    
+        # Roll characters with the correct total count
         rolled_chars = await self.roll_characters(gender, count=total_rolls)
 
         if not rolled_chars:
@@ -183,10 +190,10 @@ class harem(commands.Cog):
         # Create embed
         embed = discord.Embed(
             title="🎲 Character Roll",
-            description=f"React to any character to claim them!\n\n",
+            description=f"React to any character to claim them!\n**Total Rolls:** {total_rolls} (Base: {base_rolls} + Extra: {extra_rolls})\n\n",
             color=0x00ff00
         )
-        
+    
         # Add characters to embed
         reactions = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
         char_mapping = {}
@@ -219,8 +226,8 @@ class harem(commands.Cog):
         
         # Update user stats
         await self.config.user(ctx.author).last_roll.set(datetime.now().isoformat())
-        total_rolls = await self.config.user(ctx.author).total_rolls()
-        await self.config.user(ctx.author).total_rolls.set(total_rolls + 1)
+        total_rolls_stat = await self.config.user(ctx.author).total_rolls()
+        await self.config.user(ctx.author).total_rolls.set(total_rolls_stat + 1)
         
         # Clean up after 5 minutes
         await asyncio.sleep(300)
@@ -801,14 +808,24 @@ class harem(commands.Cog):
 
 
     @harem_admin.command(name="setcooldown")
-    async def admin_set_cooldown(self, ctx, hours: int):
-        """Set cooldown between rolls (in hours)"""
-        if hours < 0:
+    async def admin_set_cooldown(self, ctx, minutes: int):
+        """Set cooldown between rolls (in minutes)"""
+        if minutes < 0:
             await ctx.send("❌ Cooldown must be positive.")
             return
-        
-        await self.config.guild(ctx.guild).cooldown_hours.set(hours)
-        await ctx.send(f"✅ Roll cooldown set to {hours} hours.")
+    
+        await self.config.guild(ctx.guild).cooldown_minutes.set(minutes)
+    
+    # Display in human-readable format
+        if minutes >= 60:
+            hours = minutes // 60
+            remaining_minutes = minutes % 60
+            if remaining_minutes > 0:
+                await ctx.send(f"✅ Roll cooldown set to {hours}h {remaining_minutes}m ({minutes} minutes).")
+            else:
+                await ctx.send(f"✅ Roll cooldown set to {hours}h ({minutes} minutes).")
+        else:
+            await ctx.send(f"✅ Roll cooldown set to {minutes} minutes.")
     
     @harem_admin.command(name="setrole")
     async def admin_set_role(self, ctx, role: discord.Role):
