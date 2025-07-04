@@ -173,15 +173,25 @@ class harem(commands.Cog):
         base_rolls = 1
         extra_rolls = 0
         
-        # Get role bonuses from config FIRST
+        # Get role bonuses from config
         role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
+        
+        # Debug: Print role bonuses and user roles
+        print(f"Role bonuses config: {role_bonuses}")
+        print(f"User roles: {[f'{role.name} ({role.id})' for role in ctx.author.roles]}")
         
         # Check user's roles for bonuses
         for role in ctx.author.roles:
-            if str(role.id) in role_bonuses:
-                extra_rolls = max(extra_rolls, role_bonuses[str(role.id)])
+            role_id_str = str(role.id)
+            if role_id_str in role_bonuses:
+                role_bonus = role_bonuses[role_id_str]
+                print(f"Found role bonus: {role.name} gives {role_bonus} extra rolls")
+                extra_rolls = max(extra_rolls, role_bonus)
         
         total_rolls = base_rolls + extra_rolls
+        
+        # Debug: Print final calculation
+        print(f"Final calculation: base_rolls={base_rolls}, extra_rolls={extra_rolls}, total_rolls={total_rolls}")
         
         # Roll characters with the correct total count
         rolled_chars = await self.roll_characters(gender, count=total_rolls)
@@ -785,6 +795,63 @@ class harem(commands.Cog):
         status = "enabled" if not current else "disabled"
         await ctx.send(f"✅ Paimon's Harem {status}.")
     
+    @harem_admin.command(name="debug")
+    async def admin_debug(self, ctx):
+        """Debug extra rolls configuration"""
+        # Get role bonuses from config
+        role_bonuses = await self.config.guild(ctx.guild).extra_rolls_roles()
+        
+        embed = discord.Embed(
+            title="🔍 Debug: Extra Rolls Configuration",
+            color=0x00ff00
+        )
+        
+        # Show configured roles
+        if role_bonuses:
+            role_text = []
+            for role_id, bonus in role_bonuses.items():
+                role = ctx.guild.get_role(int(role_id))
+                role_name = role.name if role else f"Unknown Role ({role_id})"
+                role_text.append(f"**{role_name}:** {bonus} extra rolls")
+            
+            embed.add_field(
+                name="Configured Roles",
+                value="\n".join(role_text),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Configured Roles",
+                value="No roles configured for extra rolls",
+                inline=False
+            )
+        
+        # Show user's roles
+        user_roles = []
+        for role in ctx.author.roles:
+            bonus = role_bonuses.get(str(role.id), 0)
+            user_roles.append(f"**{role.name}** (ID: {role.id}): {bonus} extra rolls")
+        
+        embed.add_field(
+            name="Your Roles",
+            value="\n".join(user_roles) if user_roles else "No roles",
+            inline=False
+        )
+        
+        # Calculate what the user should get
+        extra_rolls = 0
+        for role in ctx.author.roles:
+            if str(role.id) in role_bonuses:
+                extra_rolls = max(extra_rolls, role_bonuses[str(role.id)])
+        
+        embed.add_field(
+            name="Expected Extra Rolls",
+            value=f"{extra_rolls} extra rolls",
+            inline=False
+        )
+        
+        await ctx.send(embed=embed)
+    
     @harem_admin.command(name="setcost")
     async def admin_set_cost(self, ctx, cost_type: str, amount: int):
         """Set costs for various actions (marriage, divorce, trade)"""
@@ -804,10 +871,45 @@ class harem(commands.Cog):
     @harem_admin.command(name="setextrarolls")
     async def admin_set_extra_rolls(self, ctx, role: discord.Role, rolls: int):
         """Set extra roll count for a role"""
+        if rolls < 0:
+            await ctx.send("❌ Extra rolls must be 0 or positive.")
+            return
+        
+        # Get current data
         data = await self.config.guild(ctx.guild).extra_rolls_roles()
+        
+        # Update the role
         data[str(role.id)] = rolls
+        
+        # Save back to config
         await self.config.guild(ctx.guild).extra_rolls_roles.set(data)
-        await ctx.send(f"✅ {role.name} now grants {rolls} extra roll(s).")
+        
+        # Confirm the save
+        saved_data = await self.config.guild(ctx.guild).extra_rolls_roles()
+        
+        if str(role.id) in saved_data and saved_data[str(role.id)] == rolls:
+            await ctx.send(f"✅ {role.name} now grants {rolls} extra roll(s).")
+        else:
+            await ctx.send(f"❌ Failed to save extra rolls for {role.name}. Please try again.")
+        
+        # Show current configuration
+        embed = discord.Embed(
+            title="Current Extra Rolls Configuration",
+            color=0x00ff00
+        )
+        
+        if saved_data:
+            role_text = []
+            for role_id, bonus in saved_data.items():
+                config_role = ctx.guild.get_role(int(role_id))
+                role_name = config_role.name if config_role else f"Unknown Role ({role_id})"
+                role_text.append(f"**{role_name}:** {bonus} extra rolls")
+            
+            embed.description = "\n".join(role_text)
+        else:
+            embed.description = "No roles configured for extra rolls"
+        
+        await ctx.send(embed=embed)
 
 
     @harem_admin.command(name="setcooldown")
