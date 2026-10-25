@@ -6,7 +6,7 @@ import discord
 from discord.ext import tasks
 from redbot.core import Config, commands
 
-from .policy import is_due
+from .policy import format_duration, is_due, parse_duration, waiting_seconds
 
 log = logging.getLogger("red.verifykick")
 
@@ -17,7 +17,7 @@ class VerifyKick(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=827419620501, force_registration=True)
-        self.config.register_guild(enabled=False, role_id=None, days=7,
+        self.config.register_guild(enabled=False, role_id=None, days=7, time_seconds=None,
                                    channel_id=None, enabled_at=None)
         self._locks = {}
         self.check_members.start()
@@ -31,7 +31,7 @@ class VerifyKick(commands.Cog):
     def _lock(self, guild):
         return self._locks.setdefault(guild.id, asyncio.Lock())
 
-    @tasks.loop(minutes=15)
+    @tasks.loop(seconds=30)
     async def check_members(self):
         for guild in self.bot.guilds:
             try:
@@ -56,7 +56,7 @@ class VerifyKick(commands.Cog):
             await guild.chunk(cache=True)
         start = datetime.fromtimestamp(settings["enabled_at"], timezone.utc)
         for cached in list(guild.members):
-            if not is_due(cached, role.id, settings["days"], start, discord.utils.utcnow()):
+            if not is_due(cached, role.id, waiting_seconds(settings), start, discord.utils.utcnow()):
                 continue
             if await self.bot.cog_disabled_in_guild(self, guild):
                 return
@@ -65,10 +65,10 @@ class VerifyKick(commands.Cog):
                 member = await guild.fetch_member(cached.id)
                 if guild.get_role(role.id) is None:
                     return
-                if not is_due(member, role.id, settings["days"], start, discord.utils.utcnow()):
+                if not is_due(member, role.id, waiting_seconds(settings), start, discord.utils.utcnow()):
                     continue
                 await member.kick(reason=(f"VerifyKick: missing required role {role.id} "
-                                          f"after {settings['days']} days"))
+                                          f"after {format_duration(waiting_seconds(settings))}"))
             except discord.NotFound:
                 continue
             except discord.HTTPException:
@@ -82,7 +82,7 @@ class VerifyKick(commands.Cog):
                         f"{discord.utils.escape_markdown(str(member))} (ID: {member.id}) "
                         f"was kicked for not having the required role "
                         f"{discord.utils.escape_markdown(role.name)} after "
-                        f"{settings['days']} days.",
+                        f"{format_duration(waiting_seconds(settings))}.",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except discord.HTTPException:
@@ -108,17 +108,33 @@ class VerifyKick(commands.Cog):
                 settings["enabled"] = False
         await ctx.send("Required role saved. Run verifykickset enable when ready.")
 
+    @verifykickset.command(name="time")
+    async def set_time(self, ctx, duration: str):
+        """Set the waiting period, e.g. 3m, 1h, or 5d; disables enforcement."""
+        try:
+            seconds = parse_duration(duration)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        await self._save_time(ctx, seconds)
+
     @verifykickset.command(name="days")
     async def set_days(self, ctx, days: int):
-        """Set the waiting period (1–365 days); disables enforcement."""
-        if not 1 <= days <= 365:
-            await ctx.send("Choose a whole number from 1 to 365 days.")
+        """Legacy shortcut for setting a waiting period in days (1–365)."""
+        try:
+            seconds = parse_duration(f"{days}d")
+        except ValueError as exc:
+            await ctx.send(str(exc))
             return
+        await self._save_time(ctx, seconds)
+
+    async def _save_time(self, ctx, seconds):
         async with self._lock(ctx.guild):
             async with self.config.guild(ctx.guild).all() as settings:
-                settings["days"] = days
+                settings["time_seconds"] = seconds
                 settings["enabled"] = False
-        await ctx.send("Waiting period saved. Run verifykickset enable when ready.")
+        await ctx.send(f"Waiting period saved: {format_duration(seconds)}. "
+                       "Run verifykickset enable when ready.")
 
     @verifykickset.command(name="channel")
     async def set_channel(self, ctx, channel: discord.TextChannel = None):
@@ -151,7 +167,7 @@ class VerifyKick(commands.Cog):
                 settings["enabled"] = True
                 settings["enabled_at"] = discord.utils.utcnow().timestamp()
         await ctx.send("Automatic kicks enabled. Existing members receive a full waiting period. "
-                       "New members' waiting periods start when they join. Checks run every 15 minutes.")
+                       "New members' waiting periods start when they join. Checks run every 30 seconds.")
 
     @verifykickset.command(name="disable")
     async def disable(self, ctx):
@@ -169,9 +185,9 @@ class VerifyKick(commands.Cog):
         await ctx.send(
             f"Enabled: {settings['enabled']}\nRequired role: "
             f"{role.mention if role else 'Not set or deleted'}\n"
-            f"Waiting period: {settings['days']} days\n"
+            f"Waiting period: {format_duration(waiting_seconds(settings))}\n"
             f"Notifications: {channel.mention if channel else 'Off or channel deleted'}\n"
-            "Checks: every 15 minutes",
+            "Checks: every 30 seconds",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -186,7 +202,7 @@ class VerifyKick(commands.Cog):
             await ctx.guild.chunk(cache=True)
         start = datetime.fromtimestamp(settings["enabled_at"], timezone.utc)
         now = discord.utils.utcnow()
-        count = sum(is_due(m, settings["role_id"], settings["days"], start, now)
+        count = sum(is_due(m, settings["role_id"], waiting_seconds(settings), start, now)
                     for m in ctx.guild.members)
         await ctx.send(f"{count} member(s) currently meet the kick criteria. "
                        "This preview did not kick anyone. Automatic checks continue if enabled.")

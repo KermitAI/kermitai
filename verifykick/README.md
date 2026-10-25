@@ -1,6 +1,6 @@
 # VerifyKick — Red cog
 
-Automatically kicks human members who lack a configured role after 1–365 days.
+Automatically kicks human members who lack a configured role after a configurable wait from 1 minute to 365 days.
 Settings are separate for each server and survive restarts. Enforcement starts disabled.
 
 ## Install
@@ -10,27 +10,49 @@ Portal and in the bot. Give the bot Kick Members and position its highest role
 above the members it needs to kick. Optional notifications require View Channel
 and Send Messages in the selected channel.
 
+This folder is the `verifykick` cog package. Its layout is:
+
+```text
+verifykick/
+├── tests/
+├── README.md
+├── __init__.py
+├── info.json
+├── policy.py
+└── verifykick.py
+```
+
+Place this folder, named `verifykick`, inside a custom cog directory configured
+with Red's `[p]addpath`, then run `[p]load verifykick`. `[p]` means your bot's
+command prefix. If using a multi-cog Downloader repository, place this entire
+folder beneath the repository root as `verifykick/`.
+This is a regular Red cog; it does not create a separate Discord application.
+
 ## Configure
 
 Server administrators can use:
 
 ```text
 [p]verifykickset role @Member
-[p]verifykickset days 7
+[p]verifykickset time 5d
 [p]verifykickset channel #mod-log
 [p]verifykickset settings
 [p]verifykickset enable
 [p]verifykickset preview
 ```
 
+- `verifykickset time 3m`, `time 1h`, and `time 5d` set minutes, hours, and days.
+  Use a positive whole number and one unit (`m`, `h`, or `d`, case-insensitive).
+  The default is 7 days. The old `verifykickset days 7` command still works.
+  Existing day-based settings and deadlines are preserved when updating.
 - `verifykickset channel` without a channel turns notifications off.
 - `verifykickset disable` stops enforcement.
-- Changing the role or days disables enforcement. Enable again to start a fresh grace period.
+- Changing the role or waiting period disables enforcement. Enable again to start a fresh grace period.
 - Repeating `enable` while already enabled does not reset deadlines.
 
 ## Behavior
 
-Checks run every 15 minutes, so kicks can occur up to approximately 15 minutes
+Checks run every 30 seconds, so kicks can occur up to approximately 30 seconds
 after the deadline (longer during outages or Discord rate limits). The countdown
 starts at the later of the server join date and the most recent enable time.
 Existing members therefore get a full grace period. Deadlines survive bot restarts;
@@ -50,3 +72,9 @@ Failed notices are not retried. Members are not sent DMs.
 
 `preview` counts currently eligible members without kicking them; it does not pause
 the automatic checker. No member-specific data is stored.
+
+## Validation
+
+Run `python -m unittest discover -s tests -v` for the eligibility policy tests.
+A live Red/Discord smoke test is required before production use: use a test server,
+confirm settings and exemptions, and verify bot permissions and notification delivery.

@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 import unittest
 
 spec = importlib.util.spec_from_file_location(
-    "policy", Path(__file__).resolve().parents[1] / "verifykick" / "policy.py")
+    "policy", Path(__file__).resolve().parents[1] / "policy.py")
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
 
@@ -22,7 +22,7 @@ class EligibilityTests(unittest.TestCase):
                          top_role=2, roles=[NS(id=5)])
 
     def due(self):
-        return policy.is_due(self.member, 99, 7, self.start, self.now)
+        return policy.is_due(self.member, 99, 7 * 86400, self.start, self.now)
 
     def test_exact_deadline_and_existing_member_grace(self):
         self.now -= timedelta(microseconds=1)
@@ -58,6 +58,37 @@ class EligibilityTests(unittest.TestCase):
         self.assertFalse(self.due())
         self.guild.me = None
         self.assertFalse(self.due())
+
+    def test_minute_and_hour_deadlines(self):
+        for value in ("3m", "1h", "5d"):
+            with self.subTest(value=value):
+                seconds = policy.parse_duration(value)
+                deadline = self.start + timedelta(seconds=seconds)
+                self.assertFalse(policy.is_due(self.member, 99, seconds, self.start,
+                                               deadline - timedelta(microseconds=1)))
+                self.assertTrue(policy.is_due(self.member, 99, seconds, self.start, deadline))
+
+
+class DurationTests(unittest.TestCase):
+    def test_units_and_limits(self):
+        for value, expected in (("3m", 180), ("1h", 3600), ("5d", 432000),
+                                (" 2H ", 7200), ("1m", 60), ("365d", 31536000)):
+            self.assertEqual(policy.parse_duration(value), expected)
+
+    def test_invalid_input(self):
+        for value in ("0m", "-1h", "1.5h", "3", "1s", "1h30m", "366d", "", "9999999999d"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                policy.parse_duration(value)
+
+    def test_existing_settings_preserved(self):
+        self.assertEqual(policy.waiting_seconds({"days": 5}), 432000)
+        self.assertEqual(policy.waiting_seconds({"days": 5, "time_seconds": None}), 432000)
+        self.assertEqual(policy.waiting_seconds({"days": 5, "time_seconds": 180}), 180)
+
+    def test_display(self):
+        self.assertEqual(policy.format_duration(180), "3 minutes")
+        self.assertEqual(policy.format_duration(3600), "1 hour")
+        self.assertEqual(policy.format_duration(432000), "5 days")
 
 
 if __name__ == "__main__":
