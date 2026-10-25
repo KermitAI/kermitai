@@ -1,4 +1,5 @@
-## Just a frog 
+## Repo by LadyLeigh
+
 
 <!--
 **KermitAI/kermitai** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
