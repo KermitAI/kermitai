@@ -26,13 +26,20 @@ def format_duration(seconds):
             return f"{amount} {unit}{'' if amount == 1 else 's'}"
 
 
-def is_due(member, role_id, seconds, enabled_at, now):
+def required_role_ids(settings):
+    roles = settings.get("role_ids")
+    if roles is not None:
+        return roles
+    return [settings["role_id"]] if settings.get("role_id") else []
+
+
+def is_due(member, role_ids, seconds, enabled_at, now):
     """Check cached eligibility; the caller must refresh before kicking."""
     if member.bot or member.id == member.guild.owner_id:
         return False
     if member.guild_permissions.administrator or member.joined_at is None:
         return False
-    if any(role.id == role_id for role in member.roles):
+    if not role_ids or any(role.id in role_ids for role in member.roles):
         return False
     me = member.guild.me
     if me is None or not me.guild_permissions.kick_members:

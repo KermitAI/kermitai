@@ -22,7 +22,7 @@ class EligibilityTests(unittest.TestCase):
                          top_role=2, roles=[NS(id=5)])
 
     def due(self):
-        return policy.is_due(self.member, 99, 7 * 86400, self.start, self.now)
+        return policy.is_due(self.member, [99], 7 * 86400, self.start, self.now)
 
     def test_exact_deadline_and_existing_member_grace(self):
         self.now -= timedelta(microseconds=1)
@@ -41,6 +41,18 @@ class EligibilityTests(unittest.TestCase):
         self.assertFalse(self.due())
         self.member.roles.pop()
         self.assertTrue(self.due())
+
+    def test_any_accepted_role_prevents_kick(self):
+        for assigned in (99, 100):
+            self.member.roles = [NS(id=assigned)]
+            self.assertFalse(policy.is_due(self.member, [99, 100], 60, self.start, self.now))
+        self.member.roles = [NS(id=5)]
+        self.assertTrue(policy.is_due(self.member, [99, 100], 60, self.start, self.now))
+        self.assertFalse(policy.is_due(self.member, [], 60, self.start, self.now))
+
+    def test_legacy_role_configuration(self):
+        self.assertEqual(policy.required_role_ids({"role_id": 99, "role_ids": None}), [99])
+        self.assertEqual(policy.required_role_ids({"role_id": 99, "role_ids": [100, 101]}), [100, 101])
 
     def test_exempt_members(self):
         for attribute, value in (("bot", True), ("id", 1), ("joined_at", None),
@@ -64,9 +76,9 @@ class EligibilityTests(unittest.TestCase):
             with self.subTest(value=value):
                 seconds = policy.parse_duration(value)
                 deadline = self.start + timedelta(seconds=seconds)
-                self.assertFalse(policy.is_due(self.member, 99, seconds, self.start,
+                self.assertFalse(policy.is_due(self.member, [99], seconds, self.start,
                                                deadline - timedelta(microseconds=1)))
-                self.assertTrue(policy.is_due(self.member, 99, seconds, self.start, deadline))
+                self.assertTrue(policy.is_due(self.member, [99], seconds, self.start, deadline))
 
 
 class DurationTests(unittest.TestCase):

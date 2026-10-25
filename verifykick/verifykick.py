@@ -6,7 +6,7 @@ import discord
 from discord.ext import tasks
 from redbot.core import Config, commands
 
-from .policy import format_duration, is_due, parse_duration, waiting_seconds
+from .policy import format_duration, is_due, parse_duration, waiting_seconds, required_role_ids
 
 log = logging.getLogger("red.verifykick")
 
@@ -17,7 +17,7 @@ class VerifyKick(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=827419620501, force_registration=True)
-        self.config.register_guild(enabled=False, role_id=None, days=7, time_seconds=None,
+        self.config.register_guild(enabled=False, role_id=None, role_ids=None, days=7, time_seconds=None,
                                    channel_id=None, enabled_at=None)
         self._locks = {}
         self.check_members.start()
@@ -49,25 +49,26 @@ class VerifyKick(commands.Cog):
         if (not settings["enabled"] or guild.unavailable
                 or await self.bot.cog_disabled_in_guild(self, guild)):
             return
-        role = guild.get_role(settings["role_id"])
-        if role is None or not settings["enabled_at"]:
+        role_ids = required_role_ids(settings)
+        roles = [guild.get_role(rid) for rid in role_ids]
+        if not roles or any(role is None for role in roles) or not settings["enabled_at"]:
             return  # A deleted role must never cause mass kicks.
         if not guild.chunked:
             await guild.chunk(cache=True)
         start = datetime.fromtimestamp(settings["enabled_at"], timezone.utc)
         for cached in list(guild.members):
-            if not is_due(cached, role.id, waiting_seconds(settings), start, discord.utils.utcnow()):
+            if not is_due(cached, role_ids, waiting_seconds(settings), start, discord.utils.utcnow()):
                 continue
             if await self.bot.cog_disabled_in_guild(self, guild):
                 return
             try:
                 # Refresh roles and membership immediately before the destructive action.
                 member = await guild.fetch_member(cached.id)
-                if guild.get_role(role.id) is None:
+                if any(guild.get_role(rid) is None for rid in role_ids):
                     return
-                if not is_due(member, role.id, waiting_seconds(settings), start, discord.utils.utcnow()):
+                if not is_due(member, role_ids, waiting_seconds(settings), start, discord.utils.utcnow()):
                     continue
-                await member.kick(reason=(f"VerifyKick: missing required role {role.id} "
+                await member.kick(reason=(f"VerifyKick: missing all {len(role_ids)} accepted verification roles "
                                           f"after {format_duration(waiting_seconds(settings))}"))
             except discord.NotFound:
                 continue
@@ -80,8 +81,7 @@ class VerifyKick(commands.Cog):
                 try:
                     await channel.send(
                         f"{discord.utils.escape_markdown(str(member))} (ID: {member.id}) "
-                        f"was kicked for not having the required role "
-                        f"{discord.utils.escape_markdown(role.name)} after "
+                        f"was kicked for having none of the accepted verification roles after "
                         f"{format_duration(waiting_seconds(settings))}.",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
@@ -96,17 +96,22 @@ class VerifyKick(commands.Cog):
         """Configure automatic kicks for members missing a required role."""
         await ctx.send_help()
 
-    @verifykickset.command(name="role")
-    async def set_role(self, ctx, *, role: discord.Role):
-        """Set the required role. Disables enforcement until enabled again."""
-        if role.is_default() or role.managed:
-            await ctx.send("Choose an assignable role other than @everyone.")
+    @verifykickset.command(name="roles", aliases=["role"])
+    async def set_roles(self, ctx, *roles: discord.Role):
+        """Replace accepted roles. Having ANY listed role prevents a kick."""
+        if not roles:
+            await ctx.send("Provide one or more roles, e.g. verifykickset roles @Member @Verified.")
+            return
+        if any(role.is_default() or role.managed for role in roles):
+            await ctx.send("Choose assignable roles other than @everyone.")
             return
         async with self._lock(ctx.guild):
             async with self.config.guild(ctx.guild).all() as settings:
-                settings["role_id"] = role.id
+                settings["role_ids"] = list(dict.fromkeys(role.id for role in roles))
+                settings["role_id"] = None
                 settings["enabled"] = False
-        await ctx.send("Required role saved. Run verifykickset enable when ready.")
+        await ctx.send("Accepted roles saved (any one is sufficient). "
+                       "Run verifykickset enable when ready.")
 
     @verifykickset.command(name="time")
     async def set_time(self, ctx, duration: str):
@@ -157,9 +162,9 @@ class VerifyKick(commands.Cog):
             return
         async with self._lock(ctx.guild):
             async with self.config.guild(ctx.guild).all() as settings:
-                role = ctx.guild.get_role(settings["role_id"]) if settings["role_id"] else None
-                if role is None:
-                    await ctx.send("Set a valid required role first with verifykickset role.")
+                role_ids = required_role_ids(settings)
+                if not role_ids or any(ctx.guild.get_role(rid) is None for rid in role_ids):
+                    await ctx.send("Set valid accepted roles first with verifykickset roles.")
                     return
                 if settings["enabled"]:
                     await ctx.send("VerifyKick is already enabled; the countdown is unchanged.")
@@ -180,11 +185,13 @@ class VerifyKick(commands.Cog):
     async def show_settings(self, ctx):
         """Show the current configuration."""
         settings = await self.config.guild(ctx.guild).all()
-        role = ctx.guild.get_role(settings["role_id"]) if settings["role_id"] else None
+        role_ids = required_role_ids(settings)
+        role_labels = [ctx.guild.get_role(rid).mention if ctx.guild.get_role(rid)
+                       else f"Deleted role ({rid})" for rid in role_ids]
         channel = ctx.guild.get_channel(settings["channel_id"]) if settings["channel_id"] else None
         await ctx.send(
-            f"Enabled: {settings['enabled']}\nRequired role: "
-            f"{role.mention if role else 'Not set or deleted'}\n"
+            f"Enabled: {settings['enabled']}\nAccepted roles (any one): "
+            f"{', '.join(role_labels) if role_labels else 'Not set'}\n"
             f"Waiting period: {format_duration(waiting_seconds(settings))}\n"
             f"Notifications: {channel.mention if channel else 'Off or channel deleted'}\n"
             "Checks: every 30 seconds",
@@ -195,14 +202,16 @@ class VerifyKick(commands.Cog):
     async def preview(self, ctx):
         """Count members currently due for a kick without kicking anyone."""
         settings = await self.config.guild(ctx.guild).all()
-        if not settings["enabled"] or not ctx.guild.get_role(settings["role_id"]):
+        role_ids = required_role_ids(settings)
+        if (not settings["enabled"] or not role_ids
+                or any(ctx.guild.get_role(rid) is None for rid in role_ids)):
             await ctx.send("Configure and enable VerifyKick first. No members were kicked.")
             return
         if not ctx.guild.chunked:
             await ctx.guild.chunk(cache=True)
         start = datetime.fromtimestamp(settings["enabled_at"], timezone.utc)
         now = discord.utils.utcnow()
-        count = sum(is_due(m, settings["role_id"], waiting_seconds(settings), start, now)
+        count = sum(is_due(m, role_ids, waiting_seconds(settings), start, now)
                     for m in ctx.guild.members)
         await ctx.send(f"{count} member(s) currently meet the kick criteria. "
                        "This preview did not kick anyone. Automatic checks continue if enabled.")

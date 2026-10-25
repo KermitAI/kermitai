@@ -4,7 +4,7 @@
   ],
   "name": "VerifyKick",
   "short": "Kick members who do not obtain a required role in time.",
-  "description": "Per-server required role, configurable waiting period in minutes, hours, or days, optional kick notifications, and a preview command.",
+  "description": "Kick members who have none of the accepted verification roles after a configurable wait in minutes, hours, or days.",
   "min_bot_version": "3.5.0",
   "requirements": [],
   "tags": [

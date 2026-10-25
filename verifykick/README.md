@@ -1,6 +1,6 @@
 # VerifyKick — Red cog
 
-Automatically kicks human members who lack a configured role after a configurable wait from 1 minute to 365 days.
+Automatically kicks human members who have none of the configured verification roles after a configurable wait from 1 minute to 365 days.
 Settings are separate for each server and survive restarts. Enforcement starts disabled.
 
 ## Install
@@ -33,7 +33,7 @@ This is a regular Red cog; it does not create a separate Discord application.
 Server administrators can use:
 
 ```text
-[p]verifykickset role @Member
+[p]verifykickset roles @Member @Verified
 [p]verifykickset time 5d
 [p]verifykickset channel #mod-log
 [p]verifykickset settings
@@ -59,12 +59,17 @@ Existing members therefore get a full grace period. Deadlines survive bot restar
 overdue members can be kicked when the bot comes back online.
 
 Bots, the server owner, administrators, and members at or above the bot's highest
-role are skipped. Missing join dates are skipped. A deleted required role suspends
-kicks until configured again. Roles are refreshed before each kick. Like all
+role are skipped. Missing join dates are skipped. If any configured role is deleted, kicks pause until the accepted roles are configured again. Roles are refreshed before each kick. Like all
 Discord moderation actions, a role update racing the kick cannot be made atomic.
 
-The member must currently have the required role: losing it after the deadline
-makes them eligible at the next check. Other roles do not satisfy the requirement.
+Having ANY accepted role prevents a kick. Members are eligible only if they have
+NONE of the accepted roles when their deadline passes. Losing all accepted roles
+after the deadline makes them eligible at the next check.
+
+`verifykickset roles @Member @Verified` replaces the entire accepted list.
+The old `verifykickset role` command remains an alias and accepts multiple roles.
+Existing single-role settings continue working without resetting deadlines.
+Changing the list disables enforcement; run `verifykickset enable` afterward.
 Kicks include an audit-log reason. Optional channel notices name the member and
 ID, required role, and waiting period without pinging anyone. Notices are sent
 only after successful kicks; failed kicks or notices are logged to Red's logs.
