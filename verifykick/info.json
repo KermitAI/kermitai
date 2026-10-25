@@ -1,6 +1,10 @@
 {
-  "author": ["KermitDev"],
-  "name": "KermitDev Cogs",
-  "short": "Red Discord Bot cogs by KermitDev.",
-  "description": "Cogs for Red Discord Bot, including VerifyKick for required-role verification enforcement."
+  "author": ["LadyLeigh"],
+  "name": "VerifyKick",
+  "short": "Kick members who do not obtain a required role in time.",
+  "description": "Per-server required role, configurable waiting period, optional kick notifications, and a preview command.",
+  "min_bot_version": "3.5.0",
+  "requirements": [],
+  "tags": ["moderation", "roles", "kick"],
+  "end_user_data_statement": "This cog stores server settings only, with no per-user data."
 }
