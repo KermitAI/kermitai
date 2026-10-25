@@ -22,12 +22,6 @@ verifykick/
 └── verifykick.py
 ```
 
-Place this folder, named `verifykick`, inside a custom cog directory configured
-with Red's `[p]addpath`, then run `[p]load verifykick`. `[p]` means your bot's
-command prefix. If using a multi-cog Downloader repository, place this entire
-folder beneath the repository root as `verifykick/`.
-This is a regular Red cog; it does not create a separate Discord application.
-
 ## Configure
 
 Server administrators can use:
@@ -77,9 +71,3 @@ Failed notices are not retried. Members are not sent DMs.
 
 `preview` counts currently eligible members without kicking them; it does not pause
 the automatic checker. No member-specific data is stored.
-
-## Validation
-
-Run `python -m unittest discover -s tests -v` for the eligibility policy tests.
-A live Red/Discord smoke test is required before production use: use a test server,
-confirm settings and exemptions, and verify bot permissions and notification delivery.
