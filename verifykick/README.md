@@ -10,10 +10,6 @@ Portal and in the bot. Give the bot Kick Members and position its highest role
 above the members it needs to kick. Optional notifications require View Channel
 and Send Messages in the selected channel.
 
-Copy the `verifykick` folder into a custom cog directory configured with Red's
-`[p]addpath`, then run `[p]load verifykick`. `[p]` means your bot's command prefix.
-This is a regular Red cog; it does not create a separate Discord application.
-
 ## Configure
 
 Server administrators can use:
@@ -54,9 +50,3 @@ Failed notices are not retried. Members are not sent DMs.
 
 `preview` counts currently eligible members without kicking them; it does not pause
 the automatic checker. No member-specific data is stored.
-
-## Validation
-
-Run `python -m unittest discover -s tests -v` for the eligibility policy tests.
-A live Red/Discord smoke test is required before production use: use a test server,
-confirm settings and exemptions, and verify bot permissions and notification delivery.
