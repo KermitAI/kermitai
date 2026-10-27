@@ -26,7 +26,7 @@ Replace `[p]` with your bot prefix. Commands are restricted to bot owners and mu
 6. Twitch/YouTube alerts: Yes opens a form for the ping role (enter `none` for no ping); No skips question 7.
 7. Stream alert message: Yes opens a message form; Use default requests the App default; No leaves the message unspecified.
 8. Tickets: Yes shows the notice to reach out manually for setup; No continues.
-9. Autokick: Yes opens a form for required roles, time after joining, an optional notification channel, and whether ALL or ANY listed roles are required. No continues.
+9. Autokick: Yes opens a form for required roles, time after joining, an optional notification channel, and a free-text description of the role requirements. No continues.
 10. Review answers and Submit, Start over, Back or Cancel.
 
 Blank optional message fields explicitly request the App's default; the cog does not invent message templates. Role names, channel names, message templates and timeframes are collected as preferences for manual setup, not resolved or applied to another server.

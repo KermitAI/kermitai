@@ -31,12 +31,6 @@ class AnswerModal(discord.ui.Modal):
             details[field.label] = value or (
                 "Use App default" if self.source.step in (2, 3, 6) else "No notification channel"
             )
-        if self.source.step == 8:
-            mode = details["Role requirement"].upper()
-            if mode not in ("ALL", "ANY"):
-                await interaction.response.send_message("Enter ALL or ANY for the role requirement.", ephemeral=True)
-                return
-            details["Role requirement"] = mode
         await self.source.cog.handle(interaction, self.source, "answer", details)
 
     async def on_error(self, interaction, error):

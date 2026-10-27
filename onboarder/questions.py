@@ -24,7 +24,7 @@ FIELDS = {
         ("Required roles", "List the role names or IDs members must obtain", True),
         ("Time allowed after joining", "For example: 30 minutes, 2 hours, or 3 days", True),
         ("Kick notification channel (optional)", "Channel name or ID; leave blank for no notification", False),
-        ("Role requirement", "Must members obtain ALL listed roles or ANY one?", True),
+        ("Role requirement", "Describe which roles members need to avoid being kicked", True),
     ],
 }
 

@@ -29,13 +29,13 @@ class QuestionnaireTests(unittest.TestCase):
                        guild_name="Staff server", guild_id=99, token="reference",
                        answers={"0": {"details": {"Logging channels": text}},
                                 "5": {"choice": "No"},
-                                "8": {"choice": "Yes", "details": {"Role requirement": "ALL", "Time allowed after joining": "2 hours"}}})
+                                "8": {"choice": "Yes", "details": {"Role requirement": "Either Verified or Member is fine", "Time allowed after joining": "2 hours"}}})
         result = questions.report(session)
         self.assertIn(text, result)
         self.assertIn("Applicant (ID: 42)", result)
         self.assertIn("Staff server (ID: 99)", result)
         self.assertIn("7. Stream alert message\nSkipped", result)
-        self.assertIn("Role requirement: ALL", result)
+        self.assertIn("Role requirement: Either Verified or Member is fine", result)
         self.assertIn("Time allowed after joining: 2 hours", result)
         for index, (title, _) in enumerate(questions.QUESTIONS):
             self.assertIn(f"{index + 1}. {title}", result)
