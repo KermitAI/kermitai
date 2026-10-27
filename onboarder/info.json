@@ -1,0 +1,10 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "Onboarder",
+  "short": "Collect bot setup preferences through a DM questionnaire.",
+  "description": "Owner-operated onboarding with buttons, text entry forms, saved progress and private channel submissions.",
+  "min_bot_version": "3.5.0",
+  "requirements": [],
+  "tags": ["onboarding", "forms", "utility"],
+  "end_user_data_statement": "Stores active questionnaires, respondent IDs, answers, and message IDs until submission or cancellation. Submitted responses remain in the configured Discord channel."
+}
