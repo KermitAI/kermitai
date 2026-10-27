@@ -1,0 +1,17 @@
+{
+  "author": [
+    "LadyLeigh"
+  ],
+  "name": "Birthday",
+  "short": "Collect birthdays with a button and send custom birthday wishes.",
+  "description": "Attach a persistent birthday signup button to a bot message. Save month/day per server and send custom birthday mentions at a configured local hour.",
+  "min_bot_version": "3.5.0",
+  "requirements": [
+    "tzdata"
+  ],
+  "tags": [
+    "birthday",
+    "community"
+  ],
+  "end_user_data_statement": "Stores member IDs, birthday month/day, and last announcement year per server. Members can remove their data with birthday forget."
+}
