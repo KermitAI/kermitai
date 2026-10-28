@@ -1,0 +1,11 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "Echo",
+  "short": "Privately ask Paimon to echo a message as the bot owner.",
+  "description": "Owner-only slash command that posts a normal bot message in the current channel or a channel specified by mention, link, or ID. Confirmations and errors are private.",
+  "install_msg": "Load echo, then run [p]slash enable echo and [p]slash sync. Use /echo message:Hello! or start the message with a channel mention, channel link, or ID.",
+  "min_bot_version": "3.5.0",
+  "requirements": [],
+  "tags": ["utility", "owner", "slash"],
+  "end_user_data_statement": "This cog does not persistently store user data."
+}
