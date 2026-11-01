@@ -323,6 +323,52 @@ class Crates(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    async def remove_inventory_item(self, guild_id, discord_id, name, quantity):
+        """Remove owned items without changing pull counts or cooldown timestamps."""
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or not 1 <= quantity <= 1_000_000:
+            raise ValueError("Choose a quantity from 1 to 1,000,000.")
+        async with self.lock(guild_id):
+            group = self.config.guild_from_id(guild_id)
+            settings = await group.all()
+            state = settings["collections"]
+            data = await self._discord_collection(state, guild_id, discord_id)
+            owned = data["inventory"].get(name, 0)
+            if owned < quantity:
+                raise ValueError(f"That member owns {owned:,} of that item; cannot remove {quantity:,}. Use the exact inventory item name.")
+            # Match the unit value displayed in inventory, including duplicate names.
+            unit_value = 0
+            for tier in sorted(settings["tiers"].values(), key=lambda t: t["weight"]):
+                if name in tier["items"]:
+                    unit_value = tier["items"][name]["value"]
+                    break
+            remaining = owned - quantity
+            if remaining:
+                data["inventory"][name] = remaining
+            else:
+                del data["inventory"][name]
+            data["value"] = max(0, data["value"] - unit_value * quantity)
+            await group.collections.set(state)
+
+    @crate.command(name="remove")
+    @commands.mod_or_permissions(manage_messages=True)
+    async def remove(self, ctx, member: discord.Member, quantity: int, *, name: str):
+        """Moderators: remove <member> <quantity> <item name>.
+
+        Deducts items and their current catalog value (minimum total value: zero).
+        Items removed from the catalog can still be removed, with no value deduction.
+        Pull counts and cooldowns stay unchanged.
+        """
+        name = name.strip()
+        try:
+            await self.remove_inventory_item(ctx.guild.id, member.id, name, quantity)
+        except ValueError as exc:
+            await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+            return
+        await ctx.send(
+            f"Removed **{quantity:,} x {discord.utils.escape_markdown(name)}** from {member.mention}'s inventory.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     @crate.command(name="inventory", aliases=["inv"])
     async def inventory(self, ctx, member: Optional[discord.Member] = None):
         """Display collected items, rarest tiers first."""

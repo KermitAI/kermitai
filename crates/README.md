@@ -21,6 +21,17 @@ increasing pull count or changing either cooldown. A member who has only receive
 gifts remains off the leaderboard until they pull a crate. Linked Twitch accounts
 see the same inventory. Empty-pull rewards cannot be granted. Quantity: 1–1,000,000.
 
+`[p]crate remove <member> <quantity> <item name>` removes owned items with the
+same moderator permissions. Example: `[p]crate remove @member 2 Bronze Knife`.
+Use the exact inventory name; no tier is required. Removing more than the member
+owns is rejected, and stacks disappear when their quantity reaches zero. Pull
+counts and both cooldowns remain unchanged. Linked Twitch inventory reflects the
+removal too. The current catalog value is deducted from collected value, floored
+at zero; same-name items use their lowest-weight tier's value, matching inventory.
+For items no longer in the catalog, removal changes quantity only because the
+original per-item earned value was not stored. Catalog price changes mean the
+score deduction may differ from the value originally earned.
+
 ## Configuration
 
 Requires Red admin access or Manage Server permission. All settings are per server.

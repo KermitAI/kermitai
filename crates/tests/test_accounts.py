@@ -294,3 +294,47 @@ class GrantTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.cog.grant_item(1, 99, "a", "Gem", 1)
         self.assertEqual(self.cog.config.guild.data["collections"]["discord"], {})
+
+
+class RemovalTests(unittest.IsolatedAsyncioTestCase):
+    setUp = AccountTests.setUp
+
+    async def test_partial_and_full_removal_preserve_pull_history(self):
+        await self.cog._pull_reward(1, discord_id=99)
+        await self.cog.grant_item(1, 99, "a", "Gem", 3)
+        before = await self.cog.get_discord_collection(1, 99)
+        await self.cog.remove_inventory_item(1, 99, "Gem", 2)
+        after = await self.cog.get_discord_collection(1, 99)
+        self.assertEqual(after["inventory"], {"Gem": 2})
+        self.assertEqual(after["value"], 20)
+        for key in ("pulls", "last_pull", "last_pulls"):
+            self.assertEqual(after[key], before[key])
+        await self.cog.remove_inventory_item(1, 99, "Gem", 2)
+        after = await self.cog.get_discord_collection(1, 99)
+        self.assertEqual(after["inventory"], {})
+        self.assertEqual(after["value"], 0)
+        self.assertEqual(after["pulls"], 1)
+
+    async def test_invalid_removal_does_not_change_data(self):
+        await self.cog.grant_item(1, 99, "a", "Gem", 1)
+        before = await self.cog.get_discord_collection(1, 99)
+        for name, quantity in (("Gem", 0), ("Gem", -1), ("Gem", 2),
+                               ("Missing", 1), ("Gem", 1_000_001)):
+            with self.assertRaises(ValueError):
+                await self.cog.remove_inventory_item(1, 99, name, quantity)
+        self.assertEqual(await self.cog.get_discord_collection(1, 99), before)
+
+    async def test_deleted_catalog_item_can_be_removed_from_linked_inventory(self):
+        await self.cog.link_verified_twitch(1, "123", "viewer", 99)
+        await self.cog.grant_item(1, 99, "a", "Gem", 2)
+        self.cog.config.guild.data["tiers"] = {}
+        await self.cog.remove_inventory_item(1, 99, "Gem", 1)
+        data = await self.cog.get_twitch_collection(1, "123")
+        self.assertEqual(data["inventory"], {"Gem": 1})
+        self.assertEqual(data["value"], 20)
+
+    async def test_value_deduction_never_becomes_negative(self):
+        await self.cog.grant_item(1, 99, "a", "Gem", 1)
+        self.cog.config.guild.data["tiers"]["a"]["items"]["Gem"]["value"] = 100
+        await self.cog.remove_inventory_item(1, 99, "Gem", 1)
+        self.assertEqual((await self.cog.get_discord_collection(1, 99))["value"], 0)
