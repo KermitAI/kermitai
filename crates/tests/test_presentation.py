@@ -167,3 +167,54 @@ class PresentationTests(unittest.IsolatedAsyncioTestCase):
             saved["inventory"]["Old item"] = 2
             await self.cog.inventory(ctx)
             self.assertIn("Value: unavailable (item removed)", ctx.send.call_args.kwargs["embed"].description)
+
+
+class ChannelRestrictionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        accounts.AccountTests.setUp(self)
+        self.mention_patch = patch.object(module.discord, "AllowedMentions", Mentions, create=True)
+        self.mention_patch.start()
+        self.addCleanup(self.mention_patch.stop)
+
+    def context(self, command="crate pull", channel=5):
+        return types.SimpleNamespace(guild=types.SimpleNamespace(id=1),
+                                     command=types.SimpleNamespace(qualified_name=command),
+                                     channel=types.SimpleNamespace(id=channel), send=AsyncMock())
+
+    async def test_default_allows_all_channels(self):
+        ctx = self.context()
+        self.assertTrue(await self.cog.cog_check(ctx))
+        ctx.send.assert_not_awaited()
+
+    async def test_channel_restricts_entire_group_and_leaves_settings_available(self):
+        self.cog.config.guild.data["command_channel"] = 10
+        for command in ("crate", "crate pull", "crate inventory", "crate leaderboard", "crate give", "crate remove"):
+            ctx = self.context(command)
+            self.assertFalse(await self.cog.cog_check(ctx))
+            self.assertIn("<#10>", ctx.send.call_args.args[0])
+            self.assertTrue(await self.cog.cog_check(self.context(command, channel=10)))
+        self.assertTrue(await self.cog.cog_check(self.context("crateset channel")))
+        self.cog.config.guild.data["command_channel"] = None
+        self.assertTrue(await self.cog.cog_check(self.context()))
+
+    async def test_dm_defers_to_existing_guild_only_command_check(self):
+        ctx = self.context()
+        ctx.guild = None
+        self.assertTrue(await self.cog.cog_check(ctx))
+
+    async def test_channel_setting_and_reset(self):
+        ctx = self.context("crateset channel")
+        ctx.guild.me = object()
+        setting = types.SimpleNamespace(set=AsyncMock())
+        channel = types.SimpleNamespace(id=10, guild=ctx.guild, mention="<#10>",
+                                        permissions_for=lambda _: types.SimpleNamespace(
+                                            view_channel=True, send_messages=True, embed_links=True))
+        with patch.object(self.cog.config, "guild", return_value=types.SimpleNamespace(command_channel=setting)):
+            await self.cog.command_channel(ctx, channel)
+            setting.set.assert_awaited_with(10)
+            await self.cog.command_channel(ctx)
+            setting.set.assert_awaited_with(None)
+            setting.set.reset_mock()
+            channel.guild = types.SimpleNamespace(id=2)
+            await self.cog.command_channel(ctx, channel)
+            setting.set.assert_not_awaited()

@@ -23,13 +23,27 @@ class Crates(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420015, force_registration=True)
-        self.config.register_guild(tiers={}, luck_roles={}, cooldown=0, enabled=True, shared_cooldown=True, twitch_mode="points", twitch_command="!crate pull", collections={"discord": {}, "twitch": {}})
+        self.config.register_guild(tiers={}, command_channel=None, luck_roles={}, cooldown=0, enabled=True, shared_cooldown=True, twitch_mode="points", twitch_command="!crate pull", collections={"discord": {}, "twitch": {}})
         self.config.register_member(inventory={}, pulls=0, value=0, last_pull=0)
         self.locks = {}
         self.openings = set()
 
     def lock(self, guild_id):
         return self.locks.setdefault(guild_id, asyncio.Lock())
+
+    async def cog_check(self, ctx):
+        # Apply only to the crate group, including aliases and moderator commands.
+        # crateset remains usable elsewhere so admins can always change the channel.
+        if ctx.guild is None or ctx.command.qualified_name.split()[0] != "crate":
+            return True
+        settings = await self.config.guild_from_id(ctx.guild.id).all()
+        channel_id = settings.get("command_channel")
+        if channel_id is None or ctx.channel.id == channel_id:
+            return True
+        await ctx.send(f"Crate commands can only be used in <#{channel_id}>. "
+                       "An admin can change this with crateset channel.",
+                       allowed_mentions=discord.AllowedMentions.none())
+        return False
 
     async def red_delete_data_for_user(self, *, requester, user_id):
         guild_ids = set(await self.config.all_guilds()) | set(await self.config.all_members())
@@ -381,6 +395,29 @@ class Crates(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    async def reset_member_cooldown(self, guild_id, discord_id):
+        """Clear both platform timers while preserving collection and receipts."""
+        async with self.lock(guild_id):
+            group = self.config.guild_from_id(guild_id)
+            state = await group.collections()
+            data = await self._discord_collection(state, guild_id, discord_id)
+            data["last_pull"] = 0
+            data["last_pulls"] = {"discord": 0, "twitch": 0}
+            await group.collections.set(state)
+
+    @crate.command(name="resetcooldown", aliases=["resetcd"])
+    @commands.mod_or_permissions(manage_messages=True)
+    async def resetcooldown(self, ctx, member: Optional[discord.Member] = None):
+        """Moderators: resetcooldown [member]; defaults to yourself.
+
+        Clears Discord and linked Twitch cooldowns. Inventory, value, pull counts,
+        and duplicate-event receipts remain unchanged.
+        """
+        member = member or ctx.author
+        await self.reset_member_cooldown(ctx.guild.id, member.id)
+        await ctx.send(f"Crate cooldown reset for {member.mention} (Discord and linked Twitch).",
+                       allowed_mentions=discord.AllowedMentions.none())
+
     @crate.command(name="inventory", aliases=["inv"])
     async def inventory(self, ctx, member: Optional[discord.Member] = None):
         """Display collected items, rarest tiers first."""
@@ -439,6 +476,8 @@ class Crates(commands.Cog):
         tiers = settings["tiers"]
         total = sum(t["weight"] for t in tiers.values() if t["items"])
         lines = [f"Pulls enabled: {settings['enabled']} | Cooldown: {settings['cooldown']:,} seconds"]
+        channel_id = settings.get("command_channel")
+        lines.append(f"Crate command channel: <#{channel_id}>" if channel_id else "Crate command channel: any channel")
         lines.append(f"Discord/Twitch cooldown shared: {settings.get('shared_cooldown', True)}")
         lines.append(f"Twitch pull mode: {settings.get('twitch_mode', 'points')} | "
                      f"Chat command: {settings.get('twitch_command', '!crate pull')}")
@@ -685,3 +724,25 @@ class Crates(commands.Cog):
             lines.append("No populated tiers configured.")
         lines.append("Item weights within a tier are unchanged. Highest matching role bonus applies.")
         await self.send_pages(ctx, "\n".join(lines))
+
+    @crateset.command(name="channel")
+    async def command_channel(self, ctx, channel: Optional[discord.TextChannel] = None):
+        """Restrict crate commands to a channel; omit the channel to allow anywhere.
+
+        Examples: crateset channel #games | crateset channel
+        Applies to all crate subcommands, including moderator give/remove.
+        Configuration commands and Twitch integration calls are unaffected.
+        """
+        if channel is not None and channel.guild.id != ctx.guild.id:
+            await ctx.send("Choose a text channel in this server.")
+            return
+        if channel is not None:
+            perms = channel.permissions_for(ctx.guild.me)
+            if not (perms.view_channel and perms.send_messages and perms.embed_links):
+                await ctx.send("I need View Channel, Send Messages, and Embed Links in that channel.")
+                return
+        async with self.lock(ctx.guild.id):
+            await self.config.guild(ctx.guild).command_channel.set(channel.id if channel else None)
+        await ctx.send(f"Crate commands are now restricted to {channel.mention}." if channel else
+                       "Crate commands can now be used in any channel.",
+                       allowed_mentions=discord.AllowedMentions.none())

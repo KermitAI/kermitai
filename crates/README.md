@@ -32,10 +32,19 @@ For items no longer in the catalog, removal changes quantity only because the
 original per-item earned value was not stored. Catalog price changes mean the
 score deduction may differ from the value originally earned.
 
+`[p]crate resetcooldown [member]` (alias `resetcd`) clears a member's Discord and
+linked Twitch cooldowns. Omit the member to reset your own. Uses the same moderator
+permissions as give/remove and follows the configured crate channel restriction.
+Inventory, collected value, pull counts, and Twitch duplicate-event receipts stay
+unchanged. The configured cooldown duration is not changed. An opening animation
+already in progress must finish before that member starts another Discord pull.
+
 ## Configuration
 
 Requires Red admin access or Manage Server permission. All settings are per server.
 
+- `[p]crateset channel #games` restricts the entire Discord `crate` command group to that specific text channel, including pull, inventory, leaderboard, give, and remove. Aliases follow the same restriction. No moderator bypass is applied. Threads and other channels are not included. The bot must have View Channel, Send Messages, and Embed Links in the selected channel.
+- `[p]crateset channel` clears the restriction, allowing crate commands in any channel (default). Configuration commands remain available anywhere; Twitch integration calls are unaffected. If the configured channel is deleted, use this command or select a replacement.
 - `[p]crateset show` displays settings, tiers, items, and effective probabilities.
 - `[p]crateset tier <tier> <weight> [emoji]` creates or updates a tier. The optional emoji can be Unicode or a Discord custom emoji; existing tiers default to a crate emoji. Omitting it preserves the existing emoji. Names use letters, numbers, or hyphens (up to 32 characters); names are normalized to lowercase.
 - `[p]crateset item <tier> <weight> <value> <item name>` creates or updates an item. The remainder of the command is its name, so spaces do not need quotes. Names are case sensitive and up to 100 characters.

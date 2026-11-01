@@ -67,7 +67,7 @@ commands = types.SimpleNamespace(Cog=object, guild_only=decorator, group=decorat
                                  admin_or_permissions=decorator, mod_or_permissions=decorator)
 modules = {
     "crate_test_package": pkg,
-    "discord": types.SimpleNamespace(Member=object, Role=object),
+    "discord": types.SimpleNamespace(Member=object, Role=object, TextChannel=object),
     "redbot": types.ModuleType("redbot"),
     "redbot.core": types.SimpleNamespace(Config=object, commands=commands),
     "redbot.core.utils": types.ModuleType("redbot.core.utils"),
@@ -368,3 +368,39 @@ class LuckAccountTests(unittest.IsolatedAsyncioTestCase):
             result = await self.cog.pull_twitch(1, "123", "viewer", "r1")
             self.assertTrue(result["duplicate"])
             choose.assert_not_called()
+
+
+class CooldownResetTests(unittest.IsolatedAsyncioTestCase):
+    setUp = AccountTests.setUp
+
+    async def test_reset_preserves_rewards_and_allows_immediate_pull_in_both_modes(self):
+        self.cog.config.guild.data["cooldown"] = 86400
+        await self.cog._pull_reward(1, discord_id=99)
+        before = await self.cog.get_discord_collection(1, 99)
+        await self.cog.reset_member_cooldown(1, 99)
+        after = await self.cog.get_discord_collection(1, 99)
+        for key in ("inventory", "pulls", "value"):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(after["last_pull"], 0)
+        self.assertEqual(after["last_pulls"], {"discord": 0, "twitch": 0})
+        await self.cog._pull_reward(1, discord_id=99)
+        self.cog.config.guild.data["shared_cooldown"] = False
+        await self.cog.reset_member_cooldown(1, 99)
+        await self.cog._pull_reward(1, discord_id=99)
+
+    async def test_linked_twitch_reset_preserves_receipts(self):
+        await self.cog.link_verified_twitch(1, "123", "viewer", 99)
+        self.cog.config.guild.data.update(cooldown=86400, shared_cooldown=False)
+        await self.cog.pull_twitch(1, "123", "viewer", "r1")
+        await self.cog.reset_member_cooldown(1, 99)
+        self.assertTrue((await self.cog.pull_twitch(1, "123", "viewer", "r1"))["duplicate"])
+        await self.cog.pull_twitch(1, "123", "viewer", "r2")
+        self.assertEqual((await self.cog.get_twitch_collection(1, "123"))["pulls"], 2)
+
+    async def test_legacy_reset_persists_without_restoring_old_timestamp(self):
+        self.cog.config.member_from_ids(1, 99).data.update(last_pull=9999999999, pulls=2)
+        await self.cog.reset_member_cooldown(1, 99)
+        await self.cog.reset_member_cooldown(1, 99)
+        data = await self.cog.get_discord_collection(1, 99)
+        self.assertEqual(data["last_pull"], 0)
+        self.assertEqual(data["pulls"], 2)
