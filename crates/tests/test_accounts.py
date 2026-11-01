@@ -64,7 +64,7 @@ root = Path(__file__).parents[1]
 pkg = types.ModuleType("crate_test_package")
 pkg.__path__ = [str(root)]
 commands = types.SimpleNamespace(Cog=object, guild_only=decorator, group=decorator,
-                                 admin_or_permissions=decorator)
+                                 admin_or_permissions=decorator, mod_or_permissions=decorator)
 modules = {
     "crate_test_package": pkg,
     "discord": types.SimpleNamespace(Member=object),
@@ -261,3 +261,36 @@ class PlatformCooldownTests(unittest.IsolatedAsyncioTestCase):
             await self.cog._pull_reward(1, discord_id=99)
             with self.assertRaises(ValueError):
                 await self.cog.pull_twitch(1, "123", "viewer", "r2")
+
+
+class GrantTests(unittest.IsolatedAsyncioTestCase):
+    setUp = AccountTests.setUp
+
+    async def test_grant_stacks_value_without_pull_or_cooldown(self):
+        await self.cog._pull_reward(1, discord_id=99)
+        before = await self.cog.get_discord_collection(1, 99)
+        await self.cog.grant_item(1, 99, "a", "Gem", 3)
+        after = await self.cog.get_discord_collection(1, 99)
+        self.assertEqual(after["inventory"], {"Gem": 4})
+        self.assertEqual(after["value"], 40)
+        self.assertEqual(after["pulls"], before["pulls"])
+        self.assertEqual(after["last_pull"], before["last_pull"])
+        self.assertEqual(after["last_pulls"], before["last_pulls"])
+
+    async def test_gift_only_member_excluded_and_link_sees_grant(self):
+        await self.cog.link_verified_twitch(1, "123", "viewer", 99)
+        await self.cog.grant_item(1, 99, "a", "Gem", 2)
+        data = await self.cog.get_twitch_collection(1, "123")
+        self.assertEqual(data["inventory"], {"Gem": 2})
+        self.assertEqual(policy.ranking({99: data}, {99}), [])
+
+    async def test_invalid_grants_do_not_write(self):
+        for tier, name, qty in (("bad", "Gem", 1), ("a", "unknown", 1),
+                                ("a", "Gem", 0), ("a", "Gem", -1),
+                                ("a", "Gem", 1_000_001)):
+            with self.assertRaises(ValueError):
+                await self.cog.grant_item(1, 99, tier, name, qty)
+        self.cog.config.guild.data["tiers"]["a"]["items"]["Gem"]["empty"] = True
+        with self.assertRaises(ValueError):
+            await self.cog.grant_item(1, 99, "a", "Gem", 1)
+        self.assertEqual(self.cog.config.guild.data["collections"]["discord"], {})

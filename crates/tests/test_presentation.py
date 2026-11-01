@@ -125,17 +125,19 @@ class PresentationTests(unittest.IsolatedAsyncioTestCase):
     async def test_embed_pages_respect_discord_description_limit(self):
         # Real pagification is not installed in this test environment; verify the
         # configured page bound and the summary/footer on each emitted embed.
-        ctx = types.SimpleNamespace(send=AsyncMock())
+        ctx = types.SimpleNamespace(send=AsyncMock(), embed_colour=AsyncMock(return_value=0x123456))
         with patch.object(module, "pagify", return_value=["page one", "page two"]) as pages:
             await self.cog.send_collection(ctx, "Inventory", ["item"], "10 pulls")
         self.assertEqual(pages.call_args.kwargs["page_length"], 3000)
         self.assertEqual(ctx.send.await_count, 2)
+        self.assertTrue(all(call.kwargs["embed"].colour == 0x123456 for call in ctx.send.call_args_list))
         self.assertEqual(ctx.send.call_args.kwargs["embed"].footer["text"], "Page 2/2 | Crates")
 
     async def test_inventory_and_leaderboard_use_embeds(self):
         self.member.display_avatar = types.SimpleNamespace(url="https://example.org/avatar.png")
         guild = types.SimpleNamespace(id=1, members=[self.member])
-        ctx = types.SimpleNamespace(author=self.member, guild=guild, send=AsyncMock())
+        ctx = types.SimpleNamespace(author=self.member, guild=guild, send=AsyncMock(),
+                                    embed_colour=AsyncMock(return_value=0x123456))
         await self.cog._pull_reward(1, discord_id=99)
         original_group = self.cog.config.guild
         tiers = original_group.data["tiers"]
@@ -145,12 +147,14 @@ class PresentationTests(unittest.IsolatedAsyncioTestCase):
                  tiers=AsyncMock(return_value=tiers), collections=original_group.collections)):
             await self.cog.inventory(ctx)
             inventory = ctx.send.call_args.kwargs["embed"]
+            self.assertEqual(inventory.colour, 0x123456)
             self.assertIn("Gem", inventory.description)
             self.assertIn("x1", inventory.description)
             self.assertIn("10", inventory.fields[0]["value"])
             with patch.object(self.cog.config, "all_members", new_callable=AsyncMock, return_value={}):
                 await self.cog.leaderboard(ctx)
             leaderboard = ctx.send.call_args.kwargs["embed"]
+            self.assertEqual(leaderboard.colour, 0x123456)
             self.assertIn("Collector", leaderboard.description)
             self.assertIn("10 value", leaderboard.description)
             self.assertIn("1 pulls", leaderboard.description)

@@ -9,6 +9,18 @@ Load with `[p]load crates` after installing through your normal cog workflow.
 - `[p]crate inventory [member]` shows an embed with tier icons, item quantities, collection totals, and collected value. Items are ordered by current tier weight, lowest (rarest) first, with alphabetical ties. Items no longer in the catalog appear last. Same-name items in multiple tiers use the lowest tier weight; item weights within a tier do not affect inventory order.
 - `[p]crate leaderboard` lists all current server members with at least one successful pull, ordered by collected value, then pull count. Zero-value rewards still qualify. Uses paginated embeds with medals for the top three and readable value/pull totals.
 
+## Moderator item grants
+
+`[p]crate give <member> <tier> <quantity> <item name>` gives configured items to a
+server member. For example: `[p]crate give @member bronze 2 Bronze Knife`.
+Requires a configured Red moderator role (including your Moderators role when
+configured in Red), Red admin access, or Manage Messages permission.
+
+Grants add quantities and the item's current value to the collection, without
+increasing pull count or changing either cooldown. A member who has only received
+gifts remains off the leaderboard until they pull a crate. Linked Twitch accounts
+see the same inventory. Empty-pull rewards cannot be granted. Quantity: 1–1,000,000.
+
 ## Configuration
 
 Requires Red admin access or Manage Server permission. All settings are per server.
@@ -47,6 +59,8 @@ tries to post the final result separately. If Discord delivery fails entirely, t
 award remains saved. Empty pulls display “Better luck next time”; collected items
 display “Congratulations” and an optional reward image. Inventory and leaderboard
 use multiple embeds when necessary, preserving rarity ordering and rankings.
+Inventory and leaderboard embeds use the bot's configured default embed color
+for the command context.
 
 Example configuration (use your own image URL):
 

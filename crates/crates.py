@@ -215,8 +215,9 @@ class Crates(commands.Cog):
 
     async def send_collection(self, ctx, title, lines, summary, thumbnail=None):
         pages = list(pagify("\n".join(lines), page_length=3000)) or ["Nothing here yet."]
+        colour = await ctx.embed_colour()
         for number, page in enumerate(pages, 1):
-            embed = self.collection_embed(title, page)
+            embed = discord.Embed(title=title, description=page, colour=colour)
             embed.add_field(name="Collection stats", value=summary, inline=False)
             embed.set_footer(text=f"Page {number}/{len(pages)} | Crates")
             if thumbnail:
@@ -284,6 +285,43 @@ class Crates(commands.Cog):
             await self.animate_pull(ctx, result, tiers)
         finally:
             self.openings.discard(key)
+
+    async def grant_item(self, guild_id, discord_id, tier, name, quantity):
+        """Grant configured collectibles without changing pulls or cooldowns."""
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or not 1 <= quantity <= 1_000_000:
+            raise ValueError("Choose a quantity from 1 to 1,000,000.")
+        async with self.lock(guild_id):
+            group = self.config.guild_from_id(guild_id)
+            settings = await group.all()
+            item = settings["tiers"].get(tier.lower(), {}).get("items", {}).get(name)
+            if item is None:
+                raise ValueError("Item not found in that tier. Use its exact configured name.")
+            if item.get("empty", False):
+                raise ValueError("Empty-pull rewards cannot be given as collectibles.")
+            state = settings["collections"]
+            data = await self._discord_collection(state, guild_id, discord_id)
+            data["inventory"][name] = data["inventory"].get(name, 0) + quantity
+            data["value"] += item["value"] * quantity
+            await group.collections.set(state)
+
+    @crate.command(name="give")
+    @commands.mod_or_permissions(manage_messages=True)
+    async def give(self, ctx, member: discord.Member, tier: str, quantity: int, *, name: str):
+        """Moderators: give <member> <tier> <quantity> <item name>.
+
+        Adds items and their configured value, without counting as pulls or
+        affecting cooldowns. Gift-only members remain off the pull leaderboard.
+        """
+        name = name.strip()
+        try:
+            await self.grant_item(ctx.guild.id, member.id, tier, name, quantity)
+        except ValueError as exc:
+            await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+            return
+        await ctx.send(
+            f"Gave **{quantity:,} x {discord.utils.escape_markdown(name)}** to {member.mention}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @crate.command(name="inventory", aliases=["inv"])
     async def inventory(self, ctx, member: Optional[discord.Member] = None):
