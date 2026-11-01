@@ -44,6 +44,27 @@ class CratePolicyTests(unittest.TestCase):
         self.assertTrue(policy.positive_weight(0.5))
 
 
+class InventoryOrderTests(unittest.TestCase):
+    def test_tier_weight_order_ties_and_removed_items(self):
+        tiers = {
+            "common": {"weight": 0.7, "items": {"Bronze": {"weight": 0.001}}},
+            "rare": {"weight": 0.001, "items": {"Zenith": {"weight": 100}, "Alpha": {"weight": 1}}},
+        }
+        inventory = {"Removed": 2, "Bronze": 9, "Zenith": 1, "Alpha": 3}
+        self.assertEqual(policy.inventory_by_rarity(inventory, tiers),
+                         [("Alpha", 3), ("Zenith", 1), ("Bronze", 9), ("Removed", 2)])
+        self.assertEqual(inventory["Bronze"], 9)
+
+    def test_duplicate_names_use_lowest_tier_weight(self):
+        tiers = {"common": {"weight": 0.7, "items": {"Shared": {}}},
+                 "rare": {"weight": 0.001, "items": {"Shared": {}}},
+                 "middle": {"weight": 0.1, "items": {"Other": {}}}}
+        self.assertEqual(policy.inventory_by_rarity({"Other": 1, "Shared": 4}, tiers),
+                         [("Shared", 4), ("Other", 1)])
+        self.assertEqual(policy.inventory_by_rarity({"Z": 1, "A": 2}, {}), [("A", 2), ("Z", 1)])
+        self.assertEqual(policy.inventory_by_rarity({}, tiers), [])
+
+
 class DurationTests(unittest.TestCase):
     def test_shorthand_and_plain_seconds(self):
         cases = {"1m": 60, "3h": 10800, "1d": 86400, "2w": 1209600,

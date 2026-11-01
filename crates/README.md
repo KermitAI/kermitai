@@ -6,7 +6,7 @@ Load with `[p]load crates` after installing through your normal cog workflow.
 ## Member commands
 
 - `[p]crate pull` selects a populated tier by weight, then one item within that tier by weight. Awards one item and announces the result.
-- `[p]crate inventory [member]` lists item names and quantities, total pulls, and collected value.
+- `[p]crate inventory [member]` lists item names and quantities, total pulls, and collected value. Items are ordered by current tier weight, lowest (rarest) first, with alphabetical ties. Items no longer in the catalog appear last. Same-name items in multiple tiers use the lowest tier weight; item weights within a tier do not affect inventory order.
 - `[p]crate leaderboard` lists all current server members with at least one successful pull, ordered by collected value, then pull count. Zero-value rewards still qualify. Output is split across messages as needed.
 
 ## Configuration

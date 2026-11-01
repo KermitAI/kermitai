@@ -8,7 +8,7 @@ import discord
 from redbot.core import Config, commands
 from redbot.core.utils.chat_formatting import pagify
 
-from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration
+from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration, inventory_by_rarity
 
 
 class Crates(commands.Cog):
@@ -220,9 +220,10 @@ class Crates(commands.Cog):
         if not data["inventory"]:
             await ctx.send(f"{title} has no items yet.", allowed_mentions=discord.AllowedMentions.none())
             return
+        tiers = await self.config.guild(ctx.guild).tiers()
         lines = [f"**{title}'s inventory**"]
         lines.extend(f"{discord.utils.escape_markdown(name)} \u00d7 {qty:,}"
-                     for name, qty in sorted(data["inventory"].items()))
+                     for name, qty in inventory_by_rarity(data["inventory"], tiers))
         lines.append(f"Total pulls: {data['pulls']:,} | Collected value: {data['value']:,}")
         await self.send_pages(ctx, "\n".join(lines))
 

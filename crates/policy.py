@@ -81,3 +81,17 @@ def parse_duration(text):
     if seconds > DURATION_LIMIT:
         raise ValueError(error)
     return seconds
+
+
+def inventory_by_rarity(inventory, tiers):
+    """Sort by current tier weight; unknown items last, alphabetical ties.
+
+    Same-name items stack across tiers, so use their lowest configured tier weight.
+    Item weights within a tier do not affect this ordering.
+    """
+    weights = {}
+    for tier in tiers.values():
+        for name in tier["items"]:
+            weights[name] = min(weights.get(name, math.inf), tier["weight"])
+    return sorted(inventory.items(), key=lambda row: (
+        weights.get(row[0], math.inf), row[0].casefold(), row[0]))
