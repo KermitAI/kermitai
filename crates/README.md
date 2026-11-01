@@ -5,17 +5,20 @@ Load with `[p]load crates` after installing through your normal cog workflow.
 
 ## Member commands
 
-- `[p]crate pull` selects a populated tier by weight, then one item within that tier by weight. Awards one item and announces the result.
-- `[p]crate inventory [member]` lists item names and quantities, total pulls, and collected value. Items are ordered by current tier weight, lowest (rarest) first, with alphabetical ties. Items no longer in the catalog appear last. Same-name items in multiple tiers use the lowest tier weight; item weights within a tier do not affect inventory order.
-- `[p]crate leaderboard` lists all current server members with at least one successful pull, ordered by collected value, then pull count. Zero-value rewards still qualify. Output is split across messages as needed.
+- `[p]crate pull` selects a populated tier by weight, then one item within that tier by weight. Displays an animated emoji reel that slows onto the selected tier, then reveals the item in an embed and mentions the player. Awards one item unless the selected reward is configured as an empty pull.
+- `[p]crate inventory [member]` shows an embed with tier icons, item quantities, collection totals, and collected value. Items are ordered by current tier weight, lowest (rarest) first, with alphabetical ties. Items no longer in the catalog appear last. Same-name items in multiple tiers use the lowest tier weight; item weights within a tier do not affect inventory order.
+- `[p]crate leaderboard` lists all current server members with at least one successful pull, ordered by collected value, then pull count. Zero-value rewards still qualify. Uses paginated embeds with medals for the top three and readable value/pull totals.
 
 ## Configuration
 
 Requires Red admin access or Manage Server permission. All settings are per server.
 
 - `[p]crateset show` displays settings, tiers, items, and effective probabilities.
-- `[p]crateset tier <tier> <weight>` creates or updates a tier. Names use letters, numbers, or hyphens (up to 32 characters); names are normalized to lowercase.
+- `[p]crateset tier <tier> <weight> [emoji]` creates or updates a tier. The optional emoji can be Unicode or a Discord custom emoji; existing tiers default to a crate emoji. Omitting it preserves the existing emoji. Names use letters, numbers, or hyphens (up to 32 characters); names are normalized to lowercase.
 - `[p]crateset item <tier> <weight> <value> <item name>` creates or updates an item. The remainder of the command is its name, so spaces do not need quotes. Names are case sensitive and up to 100 characters.
+- `[p]crateset tieremoji <tier> <emoji>` changes an existing tier's emoji.
+- `[p]crateset itemimage <tier> <URL|none> <item name>` sets an optional public HTTP(S) image URL for the reward reveal, or clears it with `none`. Discord must be able to load the image; URLs are not fetched by the bot.
+- `[p]crateset itemempty <tier> <true|false> <item name>` makes that weighted reward an empty pull: no item or value, but it still counts as a pull and consumes the cooldown. Set false to restore its normal reward behavior. Nothing is marked empty by default; a zero-value item is still a collectible.
 - `[p]crateset removetier <tier>` removes a tier and its reward definitions from future pulls.
 - `[p]crateset removeitem <tier> <item name>` removes a reward from future pulls.
 - `[p]crateset cooldown <duration>` sets the wait between successful pulls. Accepts `s` (seconds), `m` (minutes), `h` (hours), `d` (days), and `w` (weeks), such as `1m`, `3h`, `1d`, `2w`, or `1h 30m`. Plain seconds still work. Default: `0` (unlimited). Maximum: 365 days. Use `1d` for a 24-hour wait. This is a rolling cooldown, not a calendar-day reset.
@@ -29,6 +32,33 @@ Value is a nonnegative leaderboard score (up to 1,000,000,000), independent of R
 Persistent member data includes inventory, pull count, collected value, and last pull time. Supports Red's user data deletion requests. Awards and cooldowns are saved together before the announcement; if Discord cannot deliver the announcement, the reward remains in inventory. Concurrent pulls are serialized per server to prevent duplicate cooldown claims.
 
 The leaderboard uses Discord's cached server member list; enable the bot's Server Members intent for complete membership information.
+
+## Discord presentation
+
+The bot needs **Embed Links**, View Channel, and Send Messages permissions. Custom
+emojis must be usable by the bot (external emojis may require Use External Emojis).
+The Discord pull reveal takes approximately six seconds with a limited number of
+message edits. Discord rate limits can make it slower. Each member may have one
+opening animation active per server. The reel is decorative; actual reward odds
+are determined by the configured tier and item weights before the animation.
+
+Reward data and cooldown are saved before presentation. If an edit fails, the bot
+tries to post the final result separately. If Discord delivery fails entirely, the
+award remains saved. Empty pulls display “Better luck next time”; collected items
+display “Congratulations” and an optional reward image. Inventory and leaderboard
+use multiple embeds when necessary, preserving rarity ordering and rankings.
+
+Example configuration (use your own image URL):
+
+```text
+[p]crateset tier bronze 0.7 🟤
+[p]crateset tieremoji bronze 🟤
+[p]crateset itemimage bronze https://your-domain.example/bronze.png Bronze Knife
+```
+
+No example catalog is installed automatically. Updating an item's weight/value
+preserves its image and empty-pull setting. Empty rewards still qualify a member
+for the leaderboard once pulled, even with zero value and an empty inventory.
 
 ## Twitch pull methods
 
@@ -59,7 +89,7 @@ Twitch events, and account ownership before calling these methods on
 `bot.get_cog("Crates")`:
 
 - `await cog.pull_twitch(guild_id, twitch_id, username, redemption_id)` awards one
-  item and returns `tier`, `name`, `value`, and `duplicate`. Use permanent numeric
+  reward and returns `tier`, `name`, `value`, `emoji`, `image`, `empty`, and `duplicate`. Empty outcomes return `name=None` and `value=0`. Older saved receipts may lack the new presentation fields, so callers should use defaults. New receipts preserve the image and emoji at pull time. Use permanent numeric
   Twitch IDs as strings, not usernames, for identity. The latest username is saved
   for display. Redemption IDs must come from Twitch, not user input. Duplicate
   deliveries return the original result without another award. Only announce when

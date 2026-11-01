@@ -16,12 +16,13 @@ def choose_reward(tiers):
     key, tier = random.choices(available, weights=[t["weight"] for _, t in available])[0]
     items = list(tier["items"].items())
     name, item = random.choices(items, weights=[i["weight"] for _, i in items])[0]
-    return key, name, item["value"]
+    return key, (None if item.get("empty", False) else name), (0 if item.get("empty", False) else item["value"])
 
 
 def award(data, name, value, now):
     inventory = data["inventory"]
-    inventory[name] = inventory.get(name, 0) + 1
+    if name is not None:
+        inventory[name] = inventory.get(name, 0) + 1
     data["pulls"] += 1
     data["value"] += value
     data["last_pull"] = now
