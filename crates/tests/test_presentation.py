@@ -150,6 +150,7 @@ class PresentationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(inventory.colour, 0x123456)
             self.assertIn("Gem", inventory.description)
             self.assertIn("x1", inventory.description)
+            self.assertIn("1x Value: 10 | x1 Value: 10", inventory.description)
             self.assertIn("10", inventory.fields[0]["value"])
             with patch.object(self.cog.config, "all_members", new_callable=AsyncMock, return_value={}):
                 await self.cog.leaderboard(ctx)
@@ -158,3 +159,11 @@ class PresentationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Collector", leaderboard.description)
             self.assertIn("10 value", leaderboard.description)
             self.assertIn("1 pulls", leaderboard.description)
+            await self.cog.grant_item(1, 99, "a", "Gem", 18)
+            await self.cog.inventory(ctx)
+            self.assertIn("1x Value: 10 | x19 Value: 190", ctx.send.call_args.kwargs["embed"].description)
+            # A removed item remains visible without inventing a unit value.
+            saved = original_group.data["collections"]["discord"]["99"]
+            saved["inventory"]["Old item"] = 2
+            await self.cog.inventory(ctx)
+            self.assertIn("Value: unavailable (item removed)", ctx.send.call_args.kwargs["embed"].description)

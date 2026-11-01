@@ -331,12 +331,17 @@ class Crates(commands.Cog):
         member = member or ctx.author
         data = await self.get_discord_collection(ctx.guild.id, member.id)
         tiers = await self.config.guild(ctx.guild).tiers()
-        icons = {}
+        icons, values = {}, {}
         for tier in sorted(tiers.values(), key=lambda t: t["weight"]):
-            for name in tier["items"]:
+            for name, item in tier["items"].items():
                 icons.setdefault(name, tier.get("emoji", "\U0001f4e6"))
-        lines = [f"{icons.get(name, CRATE_EMOJI)} **{discord.utils.escape_markdown(name)}**  `x{qty:,}`"
-                 for name, qty in inventory_by_rarity(data["inventory"], tiers)]
+                values.setdefault(name, item["value"])
+        lines = []
+        for name, qty in inventory_by_rarity(data["inventory"], tiers):
+            valuation = (f"1x Value: {values[name]:,} | x{qty:,} Value: {values[name] * qty:,}"
+                         if name in values else "Value: unavailable (item removed)")
+            lines.append(f"{icons.get(name, CRATE_EMOJI)} **{discord.utils.escape_markdown(name)}**  "
+                         f"`x{qty:,}` · {valuation}")
         summary = (f"**{sum(data['inventory'].values()):,}** items | **{len(data['inventory']):,}** unique\n"
                    f"**{data['pulls']:,}** pulls | **{data['value']:,}** collected value")
         await self.send_collection(ctx, f"{member.display_name}'s inventory", lines or ["No items collected yet."],
