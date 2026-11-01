@@ -8,7 +8,7 @@ import discord
 from redbot.core import Config, commands
 from redbot.core.utils.chat_formatting import pagify
 
-from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times
+from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration
 
 
 class Crates(commands.Cog):
@@ -205,7 +205,7 @@ class Crates(commands.Cog):
         tier, name, value = result["tier"], result["name"], result["value"]
         # Persist the award before announcing it; a failed send cannot lose a reward.
         await ctx.send(
-            f"ðŸ“¦ **{discord.utils.escape_markdown(ctx.author.display_name)}** opened a "
+            f"\U0001f4e6 **{discord.utils.escape_markdown(ctx.author.display_name)}** opened a "
             f"**{tier}** crate and pulled **{discord.utils.escape_markdown(name)}**! "
             f"(Value: {value:,})",
             allowed_mentions=discord.AllowedMentions.none(),
@@ -221,7 +221,7 @@ class Crates(commands.Cog):
             await ctx.send(f"{title} has no items yet.", allowed_mentions=discord.AllowedMentions.none())
             return
         lines = [f"**{title}'s inventory**"]
-        lines.extend(f"{discord.utils.escape_markdown(name)} Ã— {qty:,}"
+        lines.extend(f"{discord.utils.escape_markdown(name)} \u00d7 {qty:,}"
                      for name, qty in sorted(data["inventory"].items()))
         lines.append(f"Total pulls: {data['pulls']:,} | Collected value: {data['value']:,}")
         await self.send_pages(ctx, "\n".join(lines))
@@ -237,10 +237,10 @@ class Crates(commands.Cog):
         if not rows:
             await ctx.send("Nobody in this server has pulled a crate yet.")
             return
-        lines = ["**Crates leaderboard â€” collected value**"]
+        lines = ["**Crates leaderboard - collected value**"]
         for position, (uid, data) in enumerate(rows, 1):
             name = discord.utils.escape_markdown(ctx.guild.get_member(uid).display_name)
-            lines.append(f"{position}. {name} â€” {data['value']:,} value | {data['pulls']:,} pulls")
+            lines.append(f"{position}. {name} - {data['value']:,} value | {data['pulls']:,} pulls")
         await self.send_pages(ctx, "\n".join(lines))
 
     @commands.guild_only()
@@ -262,10 +262,10 @@ class Crates(commands.Cog):
                      f"Chat command: {settings.get('twitch_command', '!crate pull')}")
         for key, tier in sorted(tiers.items()):
             chance = tier["weight"] / total * 100 if total and tier["items"] else 0
-            lines.append(f"**{key}** â€” weight {tier['weight']:g}, chance {chance:.2f}%")
+            lines.append(f"**{key}** - weight {tier['weight']:g}, chance {chance:.2f}%")
             item_total = sum(i["weight"] for i in tier["items"].values())
             for name, item in sorted(tier["items"].items()):
-                lines.append(f"  {discord.utils.escape_markdown(name)} â€” value {item['value']:,}, "
+                lines.append(f"  {discord.utils.escape_markdown(name)} - value {item['value']:,}, "
                              f"weight {item['weight']:g}, {item['weight'] / item_total * 100:.2f}% within tier")
             if not tier["items"]:
                 lines.append("  No items; excluded from pulls.")
@@ -277,12 +277,12 @@ class Crates(commands.Cog):
     async def set_tier(self, ctx, tier: str, weight: float):
         """Add/update a tier: crateset tier <tier> <weight>.
 
-        Tier names use 1â€“32 letters, digits, or hyphens. Weights are relative:
+        Tier names use 1-32 letters, digits, or hyphens. Weights are relative:
         weights 3 and 1 give 75% and 25% chances among populated tiers.
         """
         tier = tier.lower()
         if not re.fullmatch(r"[a-z0-9-]{1,32}", tier) or not positive_weight(weight):
-            await ctx.send("Use a tier name of 1â€“32 letters/digits/hyphens and a finite weight greater than 0, up to 1,000,000.")
+            await ctx.send("Use a tier name of 1-32 letters/digits/hyphens and a finite weight greater than 0, up to 1,000,000.")
             return
         async with self.lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).tiers() as tiers:
@@ -301,10 +301,10 @@ class Crates(commands.Cog):
         """
         tier, name = tier.lower(), name.strip()
         if not positive_weight(weight) or not 0 <= value <= 1_000_000_000:
-            await ctx.send("Weight must be finite and greater than 0, up to 1,000,000. Value must be 0â€“1,000,000,000.")
+            await ctx.send("Weight must be finite and greater than 0, up to 1,000,000. Value must be 0-1,000,000,000.")
             return
         if not 1 <= len(name) <= 100 or any(ord(c) < 32 for c in name):
-            await ctx.send("Item names must be 1â€“100 characters on one line.")
+            await ctx.send("Item names must be 1-100 characters on one line.")
             return
         async with self.lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).tiers() as tiers:
@@ -335,10 +335,15 @@ class Crates(commands.Cog):
         await ctx.send("Item removed. Existing inventories are preserved." if removed is not None else "Item not found.")
 
     @crateset.command(name="cooldown")
-    async def cooldown(self, ctx, seconds: int):
-        """Set time between pulls in seconds; 0 allows unlimited pulls (default)."""
-        if not 0 <= seconds <= 31_536_000:
-            await ctx.send("Choose a cooldown from 0 to 31,536,000 seconds.")
+    async def cooldown(self, ctx, *, duration: str):
+        """Set time between pulls: 1m, 3h, 1d, 2w, 1h 30m, or plain seconds.
+
+        Use 0 for unlimited pulls (default). Maximum: 365 days.
+        """
+        try:
+            seconds = parse_duration(duration)
+        except ValueError as exc:
+            await ctx.send(str(exc))
             return
         async with self.lock(ctx.guild.id):
             await self.config.guild(ctx.guild).cooldown.set(seconds)

@@ -18,7 +18,7 @@ Requires Red admin access or Manage Server permission. All settings are per serv
 - `[p]crateset item <tier> <weight> <value> <item name>` creates or updates an item. The remainder of the command is its name, so spaces do not need quotes. Names are case sensitive and up to 100 characters.
 - `[p]crateset removetier <tier>` removes a tier and its reward definitions from future pulls.
 - `[p]crateset removeitem <tier> <item name>` removes a reward from future pulls.
-- `[p]crateset cooldown <seconds>` sets the wait between successful pulls. Default: 0 (unlimited). Use 86400 for a 24-hour wait. This is a rolling cooldown, not a calendar-day reset.
+- `[p]crateset cooldown <duration>` sets the wait between successful pulls. Accepts `s` (seconds), `m` (minutes), `h` (hours), `d` (days), and `w` (weeks), such as `1m`, `3h`, `1d`, `2w`, or `1h 30m`. Plain seconds still work. Default: `0` (unlimited). Maximum: 365 days. Use `1d` for a 24-hour wait. This is a rolling cooldown, not a calendar-day reset.
 - `[p]crateset sharedcooldown <true|false>` controls whether linked Discord and Twitch accounts share a pull cooldown. Default: true. False gives Discord and Twitch independent timers using the same configured duration. Twitch channel-point and chat-command pulls always share the Twitch timer. Unlinked accounts already have independent collections and timers.
 - `[p]crateset enabled <true|false>` enables or disables pulls. Default: true. Inventories and leaderboards remain available.
 

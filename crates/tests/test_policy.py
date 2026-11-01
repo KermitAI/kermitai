@@ -44,5 +44,23 @@ class CratePolicyTests(unittest.TestCase):
         self.assertTrue(policy.positive_weight(0.5))
 
 
+class DurationTests(unittest.TestCase):
+    def test_shorthand_and_plain_seconds(self):
+        cases = {"1m": 60, "3h": 10800, "1d": 86400, "2w": 1209600,
+                 "45s": 45, "0": 0, "86400": 86400, " 3H ": 10800,
+                 "1h30m": 5400, "1h 30m": 5400, "1 w 2d 3h 4m 5s": 788645,
+                 "365d": 31536000, "31536000": 31536000}
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(policy.parse_duration(text), expected)
+
+    def test_invalid_or_excessive_durations(self):
+        for text in ("", " ", "-1", "-1h", "1.5h", "1mo", "1y", "tomorrow",
+                     "1h garbage", "1h -30m", "1h 30", "1h,30m", "366d",
+                     "53w", "31536001", "1" * 101):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                policy.parse_duration(text)
+
+
 if __name__ == "__main__":
     unittest.main()

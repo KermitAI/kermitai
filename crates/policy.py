@@ -1,6 +1,7 @@
 """Selection and accounting rules, independent of Discord."""
 import math
 import random
+import re
 
 
 def positive_weight(value):
@@ -53,3 +54,30 @@ def platform_pull_times(data):
     """Legacy pulls have unknown origin; preserve their cooldown on both platforms."""
     return {platform: data.get("last_pulls", {}).get(platform, data["last_pull"])
             for platform in ("discord", "twitch")}
+
+
+DURATION_LIMIT = 31_536_000
+DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def parse_duration(text):
+    """Parse plain seconds or whole-number duration components, up to 365 days."""
+    text = text.strip().lower()
+    error = "Use seconds or durations like 1m, 3h, 1d, 2w, or 1h 30m (maximum 365 days). Use 0 for unlimited pulls."
+    if not text or len(text) > 100:
+        raise ValueError(error)
+    if re.fullmatch(r"[0-9]+", text):
+        seconds = int(text)
+    else:
+        seconds = 0
+        position = 0
+        for match in re.finditer(r"([0-9]+)\s*([smhdw])", text):
+            if text[position:match.start()].strip():
+                raise ValueError(error)
+            seconds += int(match[1]) * DURATION_UNITS[match[2]]
+            position = match.end()
+        if position == 0 or text[position:].strip():
+            raise ValueError(error)
+    if seconds > DURATION_LIMIT:
+        raise ValueError(error)
+    return seconds
