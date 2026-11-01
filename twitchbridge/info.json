@@ -1,0 +1,17 @@
+{
+  "author": [
+    "LadyLeigh"
+  ],
+  "name": "TwitchBridge",
+  "short": "Custom Twitch connections and Discord chat logs.",
+  "description": "Owner-controlled broadcaster linking, device authorization, EventSub connection management, and queued Twitch chat logging.",
+  "min_bot_version": "3.5.0",
+  "requirements": [
+    "aiohttp>=3.9.0,<4"
+  ],
+  "tags": [
+    "twitch",
+    "logging"
+  ],
+  "end_user_data_statement": "Stores Twitch broadcaster IDs, usernames, OAuth tokens and Discord channel settings. Copies Twitch messages to configured Discord channels; no local chat archive is kept."
+}

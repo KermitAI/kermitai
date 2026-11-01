@@ -1,11 +1,17 @@
 {
-  "author": ["LadyLeigh"],
+  "author": [
+    "LadyLeigh"
+  ],
   "name": "Crates",
   "short": "Configurable crate pulls and item collections.",
   "description": "Start with an empty catalog, configure weighted crate tiers and items, collect rewards, and rank server members by collected value.",
   "min_bot_version": "3.5.0",
   "requirements": [],
-  "tags": ["crates", "collection", "game"],
+  "tags": [
+    "crates",
+    "collection",
+    "game"
+  ],
   "install_msg": "Configure tiers and items with [p]crateset before using [p]crate pull. See [p]help crateset for configuration commands.",
-  "end_user_data_statement": "Stores per-server member IDs, inventories, pull counts, collected values, and last pull timestamps. Supports Red's user data deletion requests."
+  "end_user_data_statement": "Stores per-server Discord member IDs, Twitch user IDs and latest usernames, verified account links, inventories, pull counts, collected values, overall and per-platform last pull timestamps, and Twitch redemption and chat command receipts. Supports Red Discord user deletion requests and an integration API for verified Twitch data deletion. Merged items remain in the Discord inventory after Twitch-only deletion."
 }
