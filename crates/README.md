@@ -56,6 +56,38 @@ Persistent member data includes inventory, pull count, collected value, and last
 
 The leaderboard uses Discord's cached server member list; enable the bot's Server Members intent for complete membership information.
 
+## Role luck bonuses
+
+- `[p]crateset luck <role> <percent>` sets a rarity weight bonus, for example
+  `[p]crateset luck @ServerBoosters 25`. Accepts a role mention or quoted role name.
+  Allowed bonus: 0–1,000%; zero removes the bonus.
+- `[p]crateset luckremove <role>` removes a role bonus.
+- `[p]crateset luckshow [member]` previews that member's base and effective tier
+  probabilities. `[p]crateset show` also lists configured role bonuses.
+
+Requires the same Red admin/Manage Server permissions as other crate settings.
+No role bonuses are enabled by default. The highest bonus among the member's
+current roles applies; multiple bonuses do not stack. Deleted roles stop matching.
+
+Luck adjusts the relative weights of populated tiers: the commonest tier keeps
+its weight, the rarest receives the full percentage multiplier, and intermediate
+tiers receive a proportional boost based on their weight between those extremes.
+Formula: `adjusted = weight * (1 + percent/100 * (max_weight-weight)/(max_weight-min_weight))`.
+The resulting weights are normalized into probabilities. A 25% bonus therefore
+means up to 25% more relative weight, not 25 percentage points added to the pull
+chance. Use `luckshow` to see exact effective chances. Equal-weight tiers or a
+single populated tier have no rarity difference, so their chances stay unchanged.
+Empty tiers are excluded, and item weights within the selected tier stay unchanged.
+Luck targets low tier weight, regardless of item value or empty-reward settings.
+
+Discord pulls use current cached server roles. Twitch pulls use those same roles
+when the Twitch account is verified and linked to a current Discord member;
+unlinked Twitch users and unavailable member records receive no bonus. Role
+bonuses do not change cooldowns, saved tier weights, manual item grants, inventory
+ordering, or previously awarded results. Twitch event retries return the saved
+result without rerolling even if roles changed. Enable Server Members intent for
+reliable membership and role information.
+
 ## Discord presentation
 
 The bot needs **Embed Links**, View Channel, and Send Messages permissions. Custom

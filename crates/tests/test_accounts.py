@@ -67,7 +67,7 @@ commands = types.SimpleNamespace(Cog=object, guild_only=decorator, group=decorat
                                  admin_or_permissions=decorator, mod_or_permissions=decorator)
 modules = {
     "crate_test_package": pkg,
-    "discord": types.SimpleNamespace(Member=object),
+    "discord": types.SimpleNamespace(Member=object, Role=object),
     "redbot": types.ModuleType("redbot"),
     "redbot.core": types.SimpleNamespace(Config=object, commands=commands),
     "redbot.core.utils": types.ModuleType("redbot.core.utils"),
@@ -338,3 +338,33 @@ class RemovalTests(unittest.IsolatedAsyncioTestCase):
         self.cog.config.guild.data["tiers"]["a"]["items"]["Gem"]["value"] = 100
         await self.cog.remove_inventory_item(1, 99, "Gem", 1)
         self.assertEqual((await self.cog.get_discord_collection(1, 99))["value"], 0)
+
+
+class LuckAccountTests(unittest.IsolatedAsyncioTestCase):
+    setUp = AccountTests.setUp
+
+    def configure_roles(self):
+        self.cog.config.guild.data["luck_roles"] = {"1": 25, "2": 50, "3": 100}
+        member = types.SimpleNamespace(roles=[types.SimpleNamespace(id=1), types.SimpleNamespace(id=2)])
+        guild = types.SimpleNamespace(get_member=lambda uid: member if uid == 99 else None)
+        self.cog.bot = types.SimpleNamespace(get_guild=lambda gid: guild)
+
+    async def test_highest_bonus_applies_to_discord_and_linked_twitch(self):
+        self.configure_roles()
+        with patch.object(module, "choose_reward", return_value=("a", "Gem", 10)) as choose:
+            await self.cog._pull_reward(1, discord_id=99)
+            self.assertEqual(choose.call_args.args[1], 50)
+            await self.cog.link_verified_twitch(1, "123", "viewer", 99)
+            await self.cog.pull_twitch(1, "123", "viewer", "r1")
+            self.assertEqual(choose.call_args.args[1], 50)
+            await self.cog.pull_twitch(1, "456", "unlinked", "r2")
+            self.assertEqual(choose.call_args.args[1], 0)
+
+    async def test_missing_member_has_no_bonus_and_duplicate_does_not_roll(self):
+        self.configure_roles()
+        self.assertEqual(self.cog.member_luck(1, 1234, self.cog.config.guild.data), 0)
+        await self.cog.pull_twitch(1, "123", "viewer", "r1")
+        with patch.object(module, "choose_reward") as choose:
+            result = await self.cog.pull_twitch(1, "123", "viewer", "r1")
+            self.assertTrue(result["duplicate"])
+            choose.assert_not_called()

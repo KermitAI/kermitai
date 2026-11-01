@@ -65,6 +65,40 @@ class InventoryOrderTests(unittest.TestCase):
         self.assertEqual(policy.inventory_by_rarity({}, tiers), [])
 
 
+class LuckTests(unittest.TestCase):
+    def test_bonus_boosts_rarest_and_preserves_base_weights(self):
+        tiers = {key: {"weight": weight, "items": {"Item": {"weight": 1, "value": 1}}}
+                 for key, weight in (("rare", .001), ("middle", .25), ("common", .7))}
+        tiers["empty"] = {"weight": .00001, "items": {}}
+        base = policy.lucky_tier_weights(tiers)
+        lucky = policy.lucky_tier_weights(tiers, 50)
+        self.assertAlmostEqual(lucky["rare"], .0015)
+        self.assertEqual(lucky["common"], .7)
+        self.assertGreater(lucky["middle"], base["middle"])
+        self.assertLess(lucky["middle"], base["middle"] * 1.5)
+        self.assertGreater(lucky["rare"] / sum(lucky.values()), base["rare"] / sum(base.values()))
+        self.assertEqual(tiers["rare"]["weight"], .001)
+        self.assertNotIn("empty", lucky)
+        self.assertEqual(policy.lucky_tier_weights(tiers, 0), base)
+
+    def test_selection_uses_boosted_tier_weights_and_original_item_weights(self):
+        tiers = {"rare": {"weight": 1, "items": {"A": {"weight": 7, "value": 10}}},
+                 "common": {"weight": 9, "items": {"B": {"weight": 2, "value": 1}}}}
+        calls = []
+        def choose(population, *, weights):
+            calls.append(weights)
+            return [population[0]]
+        with patch.object(policy.random, "choices", side_effect=choose):
+            self.assertEqual(policy.choose_reward(tiers, 50), ("rare", "A", 10))
+        self.assertEqual(calls, [[1.5, 9], [7]])
+
+    def test_equal_weights_and_single_tier_are_unchanged(self):
+        tiers = {name: {"weight": 1, "items": {"Item": {}}} for name in ("a", "b")}
+        self.assertEqual(policy.lucky_tier_weights(tiers, 100), {"a": 1, "b": 1})
+        self.assertEqual(policy.lucky_tier_weights({"a": tiers["a"]}, 100), {"a": 1})
+        self.assertEqual(policy.lucky_tier_weights({}, 100), {})
+
+
 class DurationTests(unittest.TestCase):
     def test_shorthand_and_plain_seconds(self):
         cases = {"1m": 60, "3h": 10800, "1d": 86400, "2w": 1209600,

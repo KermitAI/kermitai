@@ -8,12 +8,25 @@ def positive_weight(value):
     return math.isfinite(value) and 0 < value <= 1_000_000
 
 
-def choose_reward(tiers):
+def lucky_tier_weights(tiers, bonus=0):
+    """Boost rarer populated tiers; commonest unchanged, rarest gets full bonus."""
+    weights = {key: tier["weight"] for key, tier in tiers.items() if tier["items"]}
+    if not weights or bonus <= 0:
+        return weights
+    low, high = min(weights.values()), max(weights.values())
+    if low == high:
+        return weights
+    return {key: weight * (1 + bonus / 100 * (high - weight) / (high - low))
+            for key, weight in weights.items()}
+
+
+def choose_reward(tiers, bonus=0):
     # Empty tiers never participate, so an opening always awards an item.
     available = [(key, tier) for key, tier in tiers.items() if tier["items"]]
     if not available:
         raise ValueError("No tiers with items are configured yet.")
-    key, tier = random.choices(available, weights=[t["weight"] for _, t in available])[0]
+    weights = lucky_tier_weights(tiers, bonus)
+    key, tier = random.choices(available, weights=[weights[key] for key, _ in available])[0]
     items = list(tier["items"].items())
     name, item = random.choices(items, weights=[i["weight"] for _, i in items])[0]
     return key, (None if item.get("empty", False) else name), (0 if item.get("empty", False) else item["value"])

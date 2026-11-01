@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import math
 import re
 import random
 from urllib.parse import urlsplit
@@ -10,7 +11,7 @@ import discord
 from redbot.core import Config, commands
 from redbot.core.utils.chat_formatting import pagify
 
-from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration, inventory_by_rarity
+from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration, inventory_by_rarity, lucky_tier_weights
 
 
 CRATE_EMOJI = "\U0001f4e6"
@@ -22,7 +23,7 @@ class Crates(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420015, force_registration=True)
-        self.config.register_guild(tiers={}, cooldown=0, enabled=True, shared_cooldown=True, twitch_mode="points", twitch_command="!crate pull", collections={"discord": {}, "twitch": {}})
+        self.config.register_guild(tiers={}, luck_roles={}, cooldown=0, enabled=True, shared_cooldown=True, twitch_mode="points", twitch_command="!crate pull", collections={"discord": {}, "twitch": {}})
         self.config.register_member(inventory={}, pulls=0, value=0, last_pull=0)
         self.locks = {}
         self.openings = set()
@@ -147,6 +148,16 @@ class Crates(commands.Cog):
             redemption_id=message_id, twitch_source="command", message=message,
         )
 
+    def member_luck(self, guild_id, discord_id, settings):
+        bonuses = settings.get("luck_roles", {})
+        if not bonuses or discord_id is None:
+            return 0
+        guild = self.bot.get_guild(guild_id)
+        member = guild.get_member(discord_id) if guild else None
+        if member is None:
+            return 0
+        return max((bonuses.get(str(role.id), 0) for role in member.roles), default=0)
+
     async def _pull_reward(self, guild_id, *, discord_id=None, twitch_id=None,
                            username=None, redemption_id=None, twitch_source="points", message=None):
         async with self.lock(guild_id):
@@ -179,7 +190,8 @@ class Crates(commands.Cog):
             remaining = last_pull + settings["cooldown"] - now
             if remaining > 0:
                 raise ValueError(f"Your next pull is available in {int(remaining) + 1} seconds.")
-            tier, name, value = choose_reward(settings["tiers"])
+            bonus = self.member_luck(guild_id, discord_id, settings)
+            tier, name, value = choose_reward(settings["tiers"], bonus)
             award(data, name, value, now)
             pull_times[platform] = now
             data["last_pulls"] = pull_times
@@ -430,6 +442,9 @@ class Crates(commands.Cog):
         lines.append(f"Discord/Twitch cooldown shared: {settings.get('shared_cooldown', True)}")
         lines.append(f"Twitch pull mode: {settings.get('twitch_mode', 'points')} | "
                      f"Chat command: {settings.get('twitch_command', '!crate pull')}")
+        bonuses = settings.get("luck_roles", {})
+        lines.append("Role luck bonuses (highest applies): " + (
+            ", ".join(f"<@&{role_id}> +{bonus:g}%" for role_id, bonus in bonuses.items()) or "none"))
         for key, tier in sorted(tiers.items()):
             chance = tier["weight"] / total * 100 if total and tier["items"] else 0
             lines.append(f"{tier.get('emoji', CRATE_EMOJI)} **{key}** - weight {tier['weight']:g}, chance {chance:.2f}%")
@@ -625,3 +640,48 @@ class Crates(commands.Cog):
                     return
                 item["empty"] = empty
         await ctx.send("Empty-pull setting saved.")
+
+    @crateset.command(name="luck")
+    async def luck(self, ctx, role: discord.Role, percent: float):
+        """Set a role's rarity weight bonus: crateset luck @role 25.
+
+        Range 0-1000%. Highest matching role applies; bonuses do not stack.
+        Zero removes the role bonus. Preview actual chances with luckshow.
+        """
+        if not math.isfinite(percent) or not 0 <= percent <= 1000:
+            await ctx.send("Choose a luck bonus from 0 to 1,000 percent.")
+            return
+        async with self.lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).luck_roles() as roles:
+                if percent == 0:
+                    roles.pop(str(role.id), None)
+                else:
+                    roles[str(role.id)] = percent
+        await ctx.send(f"Luck bonus for {role.mention}: {percent:g}%. Highest matching role applies.",
+                       allowed_mentions=discord.AllowedMentions.none())
+
+    @crateset.command(name="luckremove")
+    async def luckremove(self, ctx, role: discord.Role):
+        """Remove a role's rarity bonus."""
+        async with self.lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).luck_roles() as roles:
+                roles.pop(str(role.id), None)
+        await ctx.send("Role luck bonus removed.")
+
+    @crateset.command(name="luckshow")
+    async def luckshow(self, ctx, member: Optional[discord.Member] = None):
+        """Preview base and effective tier chances for a server member."""
+        member = member or ctx.author
+        settings = await self.config.guild(ctx.guild).all()
+        bonus = self.member_luck(ctx.guild.id, member.id, settings)
+        base = lucky_tier_weights(settings["tiers"])
+        boosted = lucky_tier_weights(settings["tiers"], bonus)
+        lines = [f"Luck preview for {discord.utils.escape_markdown(member.display_name)}: +{bonus:g}% rarity weight bonus"]
+        base_total, boosted_total = sum(base.values()), sum(boosted.values())
+        for key in sorted(base, key=base.get):
+            lines.append(f"**{key}**: {base[key] / base_total * 100:.4f}% base -> "
+                         f"{boosted[key] / boosted_total * 100:.4f}% with luck")
+        if not base:
+            lines.append("No populated tiers configured.")
+        lines.append("Item weights within a tier are unchanged. Highest matching role bonus applies.")
+        await self.send_pages(ctx, "\n".join(lines))
