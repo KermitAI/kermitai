@@ -1,0 +1,11 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "Check",
+  "short": "Audit loaded commands by declared access requirements.",
+  "description": "Bot-owner-only command access report with five privilege categories and a review appendix for custom checks.",
+  "install_msg": "Load check, then run [p]checkcommands for a command access report.",
+  "min_bot_version": "3.5.0",
+  "requirements": [],
+  "tags": ["permissions", "audit", "utility"],
+  "end_user_data_statement": "This cog does not persistently store user data."
+}
