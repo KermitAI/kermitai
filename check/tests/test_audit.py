@@ -67,6 +67,28 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(sum(counts.values()), 1)
         self.assertEqual(review, 0)
 
+    def test_default_cog_check_marker_is_none(self):
+        class DefaultCog:
+            async def cog_check(self, ctx):
+                return True
+            cog_check.__cog_special_method__ = None
+        cmd = command()
+        cmd.cog = DefaultCog()
+        cmd.cog.requires = command().requires
+        self.assertEqual(audit.classify(cmd).category, audit.CATEGORIES[4])
+        self.assertFalse(any("custom cog_check" in note for note in audit.classify(cmd).notes))
+
+    def test_inherited_custom_cog_check_still_reviewed(self):
+        class Base:
+            async def cog_check(self, ctx):
+                raise AssertionError("Do not execute")
+        class Child(Base):
+            pass
+        cmd = command("ADMIN", None)
+        cmd.cog = Child()
+        cmd.cog.requires = command().requires
+        self.assertIsNone(audit.classify(cmd).category)
+
     def test_empty_report(self):
         text, counts, review = audit.build_report([])
         self.assertEqual(len(counts), 5)

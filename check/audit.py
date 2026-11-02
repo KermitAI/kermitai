@@ -22,9 +22,12 @@ def classify(command):
     cog = getattr(command, "cog", None)
     if cog is not None:
         nodes.append(cog)
-        # discord.py marks the base Cog implementation with this attribute.
+        # discord.py marks base Cog hooks with a None-valued attribute.
+        # Test attribute presence, not truthiness, on the underlying function.
         hook = getattr(cog, "cog_check", None)
-        if hook is not None and not getattr(hook, "__cog_special_method__", False):
+        if hook is not None and not hasattr(
+            getattr(hook, "__func__", hook), "__cog_special_method__"
+        ):
             notes.append("custom cog_check; access needs review")
             uncertain = True
     for node in nodes:
