@@ -64,7 +64,7 @@ root = Path(__file__).parents[1]
 pkg = types.ModuleType("crate_test_package")
 pkg.__path__ = [str(root)]
 commands = types.SimpleNamespace(Cog=object, guild_only=decorator, group=decorator,
-                                 admin_or_permissions=decorator, mod_or_permissions=decorator)
+                                 admin_or_permissions=decorator, mod_or_permissions=decorator, is_owner=decorator)
 modules = {
     "crate_test_package": pkg,
     "discord": types.SimpleNamespace(Member=object, Role=object, TextChannel=object),

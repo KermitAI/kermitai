@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import math
+import logging
 import re
 import random
 from urllib.parse import urlsplit
@@ -13,6 +14,8 @@ from redbot.core.utils.chat_formatting import pagify
 
 from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration, inventory_by_rarity, lucky_tier_weights
 
+
+log = logging.getLogger("red.crates")
 
 CRATE_EMOJI = "\U0001f4e6"
 
@@ -173,7 +176,7 @@ class Crates(commands.Cog):
         return max((bonuses.get(str(role.id), 0) for role in member.roles), default=0)
 
     async def _pull_reward(self, guild_id, *, discord_id=None, twitch_id=None,
-                           username=None, redemption_id=None, twitch_source="points", message=None):
+                           username=None, redemption_id=None, twitch_source="points", message=None, action_context=None):
         async with self.lock(guild_id):
             group = self.config.guild_from_id(guild_id)
             settings = await group.all()
@@ -218,7 +221,73 @@ class Crates(commands.Cog):
                 receipts[redemption_id] = result
             # Award and redemption receipt commit together, before any announcement.
             await group.collections.set(state)
-            return dict(result, duplicate=False)
+            reward_commands = copy.deepcopy(item.get("reward_commands", []))
+        # Never run external commands while holding the collection lock. Commands
+        # such as crate resetcooldown acquire it again. Persisted Twitch receipts
+        # ensure duplicate events return above without repeating these effects.
+        outcomes = await self.run_reward_commands(guild_id, discord_id, reward_commands, action_context)
+        if outcomes:
+            result["command_results"] = outcomes
+        return dict(result, duplicate=False)
+
+    @staticmethod
+    def render_reward_command(template, member_id, guild_id):
+        return (template.replace("{user_id}", str(member_id))
+                .replace("{user}", f"<@{member_id}>")
+                .replace("{guild_id}", str(guild_id)))
+
+    async def run_reward_commands(self, guild_id, member_id, actions, source_ctx=None):
+        if not actions:
+            return []
+        outcomes = []
+        guild = self.bot.get_guild(guild_id)
+        recipient = guild.get_member(member_id) if guild and member_id else None
+        for action in actions:
+            try:
+                if recipient is None:
+                    outcomes.append("Skipped: recipient is not a linked Discord server member.")
+                    continue
+                executor = guild.get_member(action["executor_id"])
+                if executor is None or not await self.bot.is_owner(executor):
+                    outcomes.append("Skipped: configuring bot owner is unavailable or no longer an owner.")
+                    continue
+                text = self.render_reward_command(action["command"], member_id, guild_id)
+                if source_ctx is not None:
+                    source = source_ctx.message
+                    prefix = source_ctx.prefix
+                else:
+                    # Twitch has no Discord message. Reuse the saved setup message
+                    # only as context; never repost it or process chat listeners.
+                    channel = guild.get_channel(action["channel_id"])
+                    if channel is None:
+                        outcomes.append("Skipped: reward command setup channel is unavailable.")
+                        continue
+                    source = await channel.fetch_message(action["message_id"])
+                    prefix = action["prefix"]
+                message = copy.copy(source)
+                message.author = executor
+                message.content = prefix + text
+                command_ctx = await self.bot.get_context(message)
+                if not command_ctx.valid:
+                    outcomes.append("Failed: reward command was not found.")
+                    continue
+                # Do not permit reward commands to roll another reward or change
+                # their own setup. Only the explicit cooldown reset is allowed
+                # from this cog, including when its aliases are used.
+                if command_ctx.command.cog is self:
+                    parts = text.split()
+                    target = self.bot.get_command(" ".join(parts[:2]))
+                    if target is None or target.qualified_name != "crate resetcooldown":
+                        outcomes.append("Skipped: only crate resetcooldown may be used from Crates itself.")
+                        continue
+                await self.bot.invoke(command_ctx)
+                outcomes.append("Failed: command reported an error." if command_ctx.command_failed else "Command completed.")
+            except Exception:
+                # The item has already been saved. Never reroll or retry side
+                # effects after an unknown partial failure.
+                log.exception("Crates reward command failed in guild %s", guild_id)
+                outcomes.append("Failed: command could not be completed; check bot logs.")
+        return outcomes
 
     async def send_pages(self, ctx, text):
         for page in pagify(text, page_length=1800):
@@ -263,6 +332,8 @@ class Crates(commands.Cog):
         embed.set_footer(text="Try again after your cooldown." if empty else "Added to your inventory.")
         if result.get("image") and not empty:
             embed.set_image(url=result["image"])
+        if result.get("command_results"):
+            embed.add_field(name="Reward commands", value="\n".join(result["command_results"]), inline=False)
         return embed
 
     async def animate_pull(self, ctx, result, tiers):
@@ -303,7 +374,7 @@ class Crates(commands.Cog):
         self.openings.add(key)
         try:
             try:
-                result = await self._pull_reward(ctx.guild.id, discord_id=ctx.author.id)
+                result = await self._pull_reward(ctx.guild.id, discord_id=ctx.author.id, action_context=ctx)
             except ValueError as exc:
                 await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
                 return
@@ -492,7 +563,8 @@ class Crates(commands.Cog):
                 lines.append(f"  {discord.utils.escape_markdown(name)} - value {item['value']:,}, "
                              f"weight {item['weight']:g}, {item['weight'] / item_total * 100:.2f}% within tier"
                              + (" [empty pull]" if item.get("empty") else "")
-                             + (" [image]" if item.get("image") else ""))
+                             + (" [image]" if item.get("image") else "")
+                             + (f" [{len(item.get('reward_commands', []))} reward commands]" if item.get("reward_commands") else ""))
             if not tier["items"]:
                 lines.append("  No items; excluded from pulls.")
         if not tiers:
@@ -746,3 +818,77 @@ class Crates(commands.Cog):
         await ctx.send(f"Crate commands are now restricted to {channel.mention}." if channel else
                        "Crate commands can now be used in any channel.",
                        allowed_mentions=discord.AllowedMentions.none())
+
+    @crateset.command(name="itemcommand")
+    @commands.is_owner()
+    async def itemcommand(self, ctx, tier: str, name: str, *, command: str):
+        """Owner only: itemcommand <tier> "Item Name" <command without prefix>.
+
+        Appends a reward command. Placeholders: {user}, {user_id}, {guild_id}.
+        Commands execute as the configuring owner with normal command checks.
+        No reward commands are installed by default. Up to five per item.
+        """
+        command = command.strip()
+        if not 1 <= len(command) <= 1000 or any(ord(c) < 32 for c in command):
+            await ctx.send("Use a single-line command of 1–1,000 characters, without its prefix.")
+            return
+        if self.bot.get_command(command.split()[0]) is None:
+            await ctx.send("Command not found. Enter an existing bot command without its prefix.")
+            return
+        async with self.lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).tiers() as tiers:
+                item = tiers.get(tier.lower(), {}).get("items", {}).get(name.strip())
+                if item is None:
+                    await ctx.send("Item not found. Quote item names containing spaces.")
+                    return
+                if item.get("empty"):
+                    await ctx.send("Reward commands require a collectible item, not an empty-pull reward.")
+                    return
+                actions = item.setdefault("reward_commands", [])
+                if len(actions) >= 5:
+                    await ctx.send("An item can have up to five reward commands. Remove one first.")
+                    return
+                actions.append({"command": command, "executor_id": ctx.author.id,
+                                "channel_id": ctx.channel.id, "message_id": ctx.message.id,
+                                "prefix": ctx.prefix})
+        await ctx.send("Reward command added. It will run on future pulls of this item only.")
+
+    @crateset.command(name="itemcommands")
+    @commands.is_owner()
+    async def itemcommands(self, ctx, tier: str, *, name: str):
+        """Owner only: list an item's reward commands and their removal numbers."""
+        tiers = await self.config.guild(ctx.guild).tiers()
+        item = tiers.get(tier.lower(), {}).get("items", {}).get(name.strip())
+        if item is None:
+            await ctx.send("Item not found.")
+            return
+        lines = [f"{index}. {discord.utils.escape_markdown(action['command'])}"
+                 for index, action in enumerate(item.get("reward_commands", []), 1)]
+        await self.send_pages(ctx, "\n".join(lines) or "No reward commands configured for this item.")
+
+    @crateset.command(name="removeitemcommand")
+    @commands.is_owner()
+    async def removeitemcommand(self, ctx, tier: str, index: int, *, name: str):
+        """Owner only: removeitemcommand <tier> <command number> <item name>."""
+        async with self.lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).tiers() as tiers:
+                item = tiers.get(tier.lower(), {}).get("items", {}).get(name.strip())
+                actions = item.get("reward_commands", []) if item else []
+                if not 1 <= index <= len(actions):
+                    await ctx.send("Command number not found. Use crateset itemcommands to list them.")
+                    return
+                actions.pop(index - 1)
+        await ctx.send("Reward command removed.")
+
+    @crateset.command(name="clearitemcommands")
+    @commands.is_owner()
+    async def clearitemcommands(self, ctx, tier: str, *, name: str):
+        """Owner only: clear all commands from an item."""
+        async with self.lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).tiers() as tiers:
+                item = tiers.get(tier.lower(), {}).get("items", {}).get(name.strip())
+                if item is None:
+                    await ctx.send("Item not found.")
+                    return
+                item["reward_commands"] = []
+        await ctx.send("All reward commands cleared for this item.")

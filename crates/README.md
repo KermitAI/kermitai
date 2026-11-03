@@ -65,6 +65,58 @@ Persistent member data includes inventory, pull count, collected value, and last
 
 The leaderboard uses Discord's cached server member list; enable the bot's Server Members intent for complete membership information.
 
+## Optional item reward commands
+
+No reward commands are installed or attached to any item automatically. These
+settings let the bot owner configure their own existing prefix commands later:
+
+- `[p]crateset itemcommand <tier> "Item Name" <command without prefix>` appends
+  a command to the item. Quote names containing spaces. Up to five commands may
+  be attached; they run in configured order on each new pull of that collectible.
+- `[p]crateset itemcommands <tier> <item name>` lists the commands with numbers.
+- `[p]crateset removeitemcommand <tier> <number> <item name>` removes one command.
+- `[p]crateset clearitemcommands <tier> <item name>` clears all of them.
+
+Placeholders: `{user}` is the pulling member's Discord mention, `{user_id}` is
+their numeric Discord ID, and `{guild_id}` is the server ID. Include the recipient
+placeholder wherever your economy or other command expects its target. The actual
+command syntax and amount are determined by the cog providing that command; Crates
+does not invent economy commands, award bank currency, or reset cooldowns by itself.
+Only built-in placeholders are replaced; this is not Python or shell execution.
+
+Only the bot owner can manage reward commands, because they execute as the owner
+who configured them, not as the member pulling. That owner must remain a bot owner
+and a current server member. Normal command argument parsing, permissions, checks,
+and command cooldowns apply. Commands are invoked directly through the bot command
+framework; they are not posted to Discord as executable chat messages. The only
+command from Crates itself allowed as a reward action is `crate resetcooldown`
+(including its alias), to avoid direct recursive pulls or configuration changes.
+
+Discord actions run in the pull's channel after the item and cooldown are saved,
+before the reveal animation. This lets a configured cooldown reset affect the
+just-completed pull. Moderator give/remove operations and empty-pull rewards do
+not trigger commands. Updating an item preserves its command list.
+
+Linked Twitch pulls can run commands for a current Discord member. They reuse the
+saved configuration message as context in its channel, so keep that message and
+channel available, and allow the bot to read its message history. Reconfigure an
+action if its setup message is deleted or its saved prefix is no longer valid.
+Normal channel checks still apply. Unlinked Twitch accounts receive their item,
+but Discord command actions are skipped. No actions are deferred until linking.
+
+The final Discord reward embed reports command completion, failure, or skipping;
+the Twitch API returns `command_results` on the original attempt. Command errors
+are logged without undoing the saved item or cooldown. A command that responds
+with its own error message without signalling a framework failure may still report
+completion. A timeout or partial failure is not retried automatically.
+
+Twitch receipts are saved before any side effect: duplicate event deliveries never
+rerun reward commands, even after failure. A process stop between saving the item
+and finishing its commands can leave actions incomplete. Arbitrary other cogs'
+side effects cannot be made transactional with Crates storage; inspect the other
+cog before manually correcting a failed payout. The receipt stores the original
+item result, not the later command execution report.
+
 ## Role luck bonuses
 
 - `[p]crateset luck <role> <percent>` sets a rarity weight bonus, for example

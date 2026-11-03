@@ -13,5 +13,5 @@
     "game"
   ],
   "install_msg": "Configure tiers and items with [p]crateset before using [p]crate pull. See [p]help crateset for configuration commands.",
-  "end_user_data_statement": "Stores per-server Discord member IDs, Twitch user IDs and latest usernames, verified account links, inventories, pull counts, collected values, overall and per-platform last pull timestamps, and Twitch redemption and chat command receipts. Supports Red Discord user deletion requests and an integration API for verified Twitch data deletion. Merged items remain in the Discord inventory after Twitch-only deletion."
+  "end_user_data_statement": "Stores per-server Discord member IDs, Twitch user IDs and latest usernames, verified account links, inventories, pull counts, collected values, overall and per-platform last pull timestamps, and Twitch redemption and chat command receipts. Supports Red Discord user deletion requests and an integration API for verified Twitch data deletion. Merged items remain in the Discord inventory after Twitch-only deletion. Optional reward command settings store command templates and the configuring owner, channel, and message IDs."
 }
