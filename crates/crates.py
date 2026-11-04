@@ -14,7 +14,7 @@ import discord
 from redbot.core import Config, commands
 from redbot.core.utils.chat_formatting import pagify
 
-from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration, inventory_by_rarity, lucky_tier_weights, item_weights, resolve_crate
+from .policy import award, choose_reward, positive_weight, empty_collection, merge_collections, platform_pull_times, parse_duration, inventory_by_rarity, lucky_tier_weights, item_weights, resolve_crate
 
 
 log = logging.getLogger("red.crates")
@@ -543,7 +543,7 @@ class Crates(commands.Cog):
         """Moderators: give <member> <tier> <quantity> <item name>.
 
         Adds items and their configured value, without counting as pulls or
-        affecting cooldowns. Gift-only members remain off the pull leaderboard.
+        affecting cooldowns. Gifts count toward leaderboard inventory value.
         """
         name = name.strip()
         try:
@@ -663,7 +663,7 @@ class Crates(commands.Cog):
             state = await self.config.guild(ctx.guild).collections()
             members.update({int(uid): data for uid, data in state["discord"].items()})
         current = {member.id: member for member in ctx.guild.members}
-        rows = ranking(members, set(current))
+        rows = []
         title = "\U0001f3c6 Crates leaderboard"
         if crate_name is not None:
             crate_name = crate_name.lower()
@@ -674,22 +674,36 @@ class Crates(commands.Cog):
             crate_name = next(iter(tiers))
 
         def crate_ranking(tier):
-            stats = {uid: data["crate_stats"][tier] for uid, data in rows
-                     if tier in data.get("crate_stats", {})}
-            return ranking(stats, set(current))
+            catalog = tiers[tier]["items"]
+            collectors = []
+            for uid, data in members.items():
+                if uid not in current:
+                    continue
+                owned = {name: qty for name, qty in data["inventory"].items()
+                         if qty > 0 and name in catalog}
+                if not owned:
+                    continue
+                collectors.append((uid, {
+                    "items": sum(owned.values()),
+                    "value": sum(catalog[name]["value"] * qty for name, qty in owned.items()),
+                    "pulls": data.get("crate_stats", {}).get(tier, {}).get("pulls", 0),
+                    "lifetime_pulls": data["pulls"],
+                }))
+            return sorted(collectors, key=lambda row: (-row[1]["value"], -row[1]["pulls"], row[0]))
 
         if crate_name is None and len(tiers) > 1:
-            positions = {uid: [] for uid, _ in rows}
-            for tier in sorted(tiers):
+            rankings = {tier: crate_ranking(tier) for tier in sorted(tiers)}
+            positions = {uid: [] for standings in rankings.values() for uid, _ in standings}
+            for tier, standings in rankings.items():
                 label = discord.utils.escape_markdown(tier)
-                ranks = {uid: rank for rank, (uid, _) in enumerate(crate_ranking(tier), 1)}
+                ranks = {uid: rank for rank, (uid, _) in enumerate(standings, 1)}
                 for uid in positions:
                     rank = f"#{ranks[uid]}" if uid in ranks else "Unranked"
                     positions[uid].append(f"{label} **{rank}**")
             lines = [f"**{discord.utils.escape_markdown(current[uid].display_name)}**\n"
-                     + " · ".join(positions[uid]) for uid, _ in rows]
-            await self.send_collection(ctx, title, lines or ["No crates pulled yet. Be the first!"],
-                                       "Per-crate positions use recorded crate pulls.")
+                     + " · ".join(positions[uid]) for uid in positions]
+            await self.send_collection(ctx, title, lines or ["No matching items in member inventories yet."],
+                                       "Positions use the current value of owned items in each crate.")
             return
         if crate_name is not None:
             rows = crate_ranking(crate_name)
@@ -700,9 +714,14 @@ class Crates(commands.Cog):
         for position, (uid, data) in enumerate(rows, 1):
             badge = medals[position - 1] if position <= 3 else f"**#{position}**"
             name = discord.utils.escape_markdown(current[uid].display_name)
-            lines.append(f"{badge} **{name}**\n{data['value']:,} value · {data['pulls']:,} pulls")
-        summary = f"**{len(rows):,}** collectors | Ranked by collected value, then pulls"
-        await self.send_collection(ctx, title, lines or ["No recorded pulls for this leaderboard yet."], summary)
+            lines.append(
+                f"{badge} **{name}**\n"
+                f"{data['items']:,} items · {data['value']:,} inventory value · "
+                f"{data['pulls']:,} recorded crate pulls · {data['lifetime_pulls']:,} lifetime pulls"
+            )
+        summary = f"**{len(rows):,}** collectors | Ranked by inventory value, then recorded crate pulls"
+        await self.send_collection(ctx, title, lines or ["No matching items in member inventories yet."], summary)
+
 
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)

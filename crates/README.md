@@ -23,7 +23,7 @@ item, any valid positive weight gives it a 100% chance.
 
 - `[p]crate <crate-name> pull` (for example `crate knives pull`) selects a named crate and rolls one of its items. `[p]crate pull <crate-name>` is an alternative. `[p]crate pull` chooses automatically only when exactly one crate is configured; otherwise it lists the crate names. If a crate name matches a built-in subcommand such as `inventory`, use the `crate pull <name>` form. Displays an animated reel of that crate's item emojis that slows onto the selected reward, then reveals the item in an embed and mentions the player. The opening embed states the crate being opened and lists item probabilities, including the member's role luck. Long reward lists continue in companion embeds. Awards one item unless the selected reward is configured as an empty pull.
 - `[p]crate inventory [member]` (alias `inv`) shows an embed with tier icons, item quantities, unit values and stack values (for example, `1x Value: 10 | x19 Value: 190`), collection totals, and collected value. Per-item values use the current catalog; removed items show value unavailable. If an item name exists in multiple tiers, its lowest-weight tier supplies the displayed value. The overall collected value remains the historical score earned at award time, so it may differ after catalog value changes. Items are ordered by current tier weight, lowest (rarest) first, with alphabetical ties. Items no longer in the catalog appear last. Same-name items in multiple tiers use the lowest tier weight; item weights within a tier do not affect inventory order.
-- `[p]crate leaderboard [crate-name]` (alias `lb`) shows each collector's position in every configured crate when several crates exist and no name is supplied. With one crate, it opens that crate's detailed leaderboard automatically. Use `[p]crate leaderboard knives` or `[p]crate knives leaderboard` to open the detailed standings for Knives. Detailed standings rank by value earned from that crate, then by pull count, with medals for the top three. Zero-value pulls count. Older combined pull totals cannot be assigned to a crate, so only pulls recorded by crate contribute to these positions. Members without recorded pulls for a crate show as **Unranked** in the overview.
+- `[p]crate leaderboard [crate-name]` (alias `lb`) shows each collector's position in every configured crate when several crates exist and no name is supplied. With one crate, it opens that crate's detailed leaderboard automatically. Use `[p]crate leaderboard knives` or `[p]crate knives leaderboard` to open the detailed standings for Knives. Detailed standings include current server members who own at least one item whose exact name matches the crate's current catalog. They show item quantity, current inventory value, recorded pulls under that crate name, and lifetime pulls across all crates. Rank uses inventory value first and recorded crate pulls second. Gifts and purchases count toward owned quantity and value. Older combined pull totals cannot be assigned to a crate. If two crates contain an item with the same name, its inventory stack counts for both. Members with no matching items in a particular crate show as **Unranked** in the overview.
 
 ## Moderator item grants
 
@@ -33,8 +33,7 @@ Requires a configured Red moderator role (including your Moderators role when
 configured in Red), Red admin access, or Manage Messages permission.
 
 Grants add quantities and the item's current value to the collection, without
-increasing pull count or changing either cooldown. A member who has only received
-gifts remains off the leaderboard until they pull a crate. Linked Twitch accounts
+increasing pull count or changing either cooldown. A member with matching gifts can appear on the leaderboard with zero pulls. Linked Twitch accounts
 see the same inventory. Empty-pull rewards cannot be granted. Quantity: 1–1,000,000.
 
 `[p]crate remove <member> <quantity> <item name>` removes owned items with the
@@ -201,8 +200,7 @@ Example configuration (use your own image URL):
 ```
 
 No example catalog is installed automatically. Updating an item's weight/value
-preserves its image and empty-pull setting. Empty rewards still qualify a member
-for the leaderboard once pulled, even with zero value and an empty inventory.
+preserves its image and empty-pull setting. Leaderboard eligibility requires a matching item in inventory.
 
 ## Twitch pull methods
 
