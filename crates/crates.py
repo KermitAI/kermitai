@@ -1,5 +1,7 @@
 import asyncio
 import copy
+from datetime import datetime, time as wall_time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import math
 import logging
 import re
@@ -20,13 +22,31 @@ log = logging.getLogger("red.crates")
 CRATE_EMOJI = "\U0001f4e6"
 
 
+def reset_timezone(name):
+    if name.upper() == "EST":
+        return timezone(timedelta(hours=-5), "EST")
+    return ZoneInfo(name)
+
+
+def daily_window(now, clock, zone_name):
+    zone = reset_timezone(zone_name)
+    local_date = datetime.fromtimestamp(now, zone).date()
+    reset_time = wall_time.fromisoformat(clock)
+    start = datetime.combine(local_date, reset_time, zone).timestamp()
+    if now < start:
+        local_date -= timedelta(days=1)
+        start = datetime.combine(local_date, reset_time, zone).timestamp()
+    end = datetime.combine(local_date + timedelta(days=1), reset_time, zone).timestamp()
+    return start, end
+
+
 class Crates(commands.Cog):
     """Configure crate tiers and collect their random rewards."""
 
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420015, force_registration=True)
-        self.config.register_guild(tiers={}, command_channel=None, luck_roles={}, cooldown=0, enabled=True, shared_cooldown=True, twitch_mode="points", twitch_command="!crate pull", collections={"discord": {}, "twitch": {}})
+        self.config.register_guild(tiers={}, command_channel=None, luck_roles={}, cooldown=0, cooldown_schedule={"mode": "user"}, enabled=True, shared_cooldown=True, twitch_mode="points", twitch_command="!crate pull", collections={"discord": {}, "twitch": {}})
         self.config.register_member(inventory={}, pulls=0, value=0, last_pull=0)
         self.locks = {}
         self.openings = set()
@@ -207,11 +227,21 @@ class Crates(commands.Cog):
             now = time.time()
             platform = "twitch" if twitch_id is not None else "discord"
             pull_times = platform_pull_times(data)
-            last_pull = (data["last_pull"] if settings.get("shared_cooldown", True)
-                         else pull_times[platform])
+            shared = settings.get("shared_cooldown", True)
+            schedule = settings["cooldown_schedule"]
+            mode = schedule["mode"]
+            timer_key = "shared" if shared else platform
+            last_pull = data["last_pull"] if shared else pull_times[platform]
             remaining = last_pull + settings["cooldown"] - now
+            if mode == "global":
+                last_global = state.get("global_pull_times", {}).get(timer_key, 0)
+                remaining = last_global + settings["cooldown"] - now
+            elif mode == "daily":
+                start, end = daily_window(now, schedule["time"], schedule["zone"])
+                remaining = end - now if last_pull >= start else 0
             if remaining > 0:
-                raise ValueError(f"Your next pull is available in {int(remaining) + 1} seconds.")
+                subject = "The server's next pull" if mode == "global" else "Your next pull"
+                raise ValueError(f"{subject} is available in {math.ceil(remaining)} seconds.")
             bonus = self.member_luck(guild_id, discord_id, settings)
             selected_crate = resolve_crate(settings["tiers"], selected_crate)
             tier, name, value, reward_key = choose_reward(settings["tiers"], bonus, crate_name=selected_crate, details=True)
@@ -221,6 +251,9 @@ class Crates(commands.Cog):
             stats["value"] += value
             pull_times[platform] = now
             data["last_pulls"] = pull_times
+            if mode == "global":
+                global_times = state.setdefault("global_pull_times", {})
+                global_times[platform] = global_times["shared"] = now
             tier_config = settings["tiers"][tier]
             item = tier_config["items"][reward_key]
             result = {"tier": tier, "name": name, "value": value,
@@ -686,6 +719,11 @@ class Crates(commands.Cog):
         lines = [f"Pulls enabled: {settings['enabled']} | Cooldown: {settings['cooldown']:,} seconds"]
         channel_id = settings.get("command_channel")
         lines.append(f"Crate command channel: <#{channel_id}>" if channel_id else "Crate command channel: any channel")
+        schedule = settings["cooldown_schedule"]
+        if schedule["mode"] == "daily":
+            lines[0] = f"Pulls enabled: {settings['enabled']} | Daily reset: {schedule['time']} {schedule['zone']}"
+        else:
+            lines[0] += f" ({schedule['mode']})"
         lines.append(f"Discord/Twitch cooldown shared: {settings.get('shared_cooldown', True)}")
         lines.append(f"Twitch pull mode: {settings.get('twitch_mode', 'points')} | "
                      f"Chat command: {settings.get('twitch_command', '!crate pull')}")
@@ -788,6 +826,37 @@ class Crates(commands.Cog):
         async with self.lock(ctx.guild.id):
             await self.config.guild(ctx.guild).cooldown.set(seconds)
         await ctx.send(f"Pull cooldown set to {seconds:,} seconds.")
+
+    @crateset.command(name="cooldownmode")
+    async def cooldownmode(self, ctx, mode: str, clock: Optional[str] = None, zone: str = "UTC"):
+        """Select user, global, or daily HH:MM [timezone]."""
+        mode = mode.lower()
+        schedule = {"mode": mode}
+        if mode == "daily":
+            if clock is None or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", clock):
+                await ctx.send("Use cooldownmode daily HH:MM [timezone], with a 24-hour time.")
+                return
+            try:
+                reset_timezone(zone)
+            except (ZoneInfoNotFoundError, ValueError):
+                await ctx.send("Unknown timezone. Use UTC, EST, or an IANA name like America/Toronto.")
+                return
+            schedule.update(time=clock, zone=zone)
+        elif mode not in {"user", "global"} or clock is not None:
+            await ctx.send("Choose user, global, or daily HH:MM [timezone].")
+            return
+        async with self.lock(ctx.guild.id):
+            await self.config.guild(ctx.guild).cooldown_schedule.set(schedule)
+        detail = f" at {clock} {zone}" if mode == "daily" else ""
+        await ctx.send(f"Crate cooldown mode set to {mode}{detail}.")
+
+    @crateset.command(name="resetglobalcooldown")
+    async def resetglobalcooldown(self, ctx):
+        """Clear the server-wide crate cooldown for Discord and Twitch."""
+        async with self.lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).collections() as state:
+                state.pop("global_pull_times", None)
+        await ctx.send("Global crate cooldown reset.")
 
     @crateset.command(name="enabled")
     async def enabled(self, ctx, enabled: bool):

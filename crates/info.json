@@ -6,7 +6,7 @@
   "short": "Configurable crate pulls and item collections.",
   "description": "Configure named crates, weighted item rewards and emojis, animated item reels, inventories, and collection leaderboards. Supports role luck, Twitch integration APIs, and Store purchases.",
   "min_bot_version": "3.5.0",
-  "requirements": [],
+  "requirements": ["tzdata"],
   "tags": [
     "crates",
     "collection",
