@@ -1,0 +1,11 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "Store",
+  "short": "Buy Crates rewards with your existing economy balance.",
+  "description": "An independent embed shop with categories, purchase confirmation, limited stock, Red bank payments, and compatible Crates item and extra-opening rewards. Starts with an empty catalog.",
+  "min_bot_version": "3.5.0",
+  "requirements": [],
+  "tags": ["shop", "store", "economy", "crates"],
+  "install_msg": "Load the updated Crates cog, configure listings with [p]storeset, and browse with [p]store. Store uses Red's standard bank balance and currency name.",
+  "end_user_data_statement": "Stores per-server listings, settings, and purchase records containing member IDs, prices, status, timestamps, and delivered reward details. Supports Red user data deletion requests. Crates stores inventory and purchase delivery receipts separately."
+}

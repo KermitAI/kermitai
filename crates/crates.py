@@ -12,7 +12,7 @@ import discord
 from redbot.core import Config, commands
 from redbot.core.utils.chat_formatting import pagify
 
-from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration, inventory_by_rarity, lucky_tier_weights
+from .policy import award, choose_reward, positive_weight, ranking, empty_collection, merge_collections, platform_pull_times, parse_duration, inventory_by_rarity, lucky_tier_weights, item_weights, resolve_crate
 
 
 log = logging.getLogger("red.crates")
@@ -139,7 +139,7 @@ class Crates(commands.Cog):
                 data = record["collection"]
             return copy.deepcopy(data)
 
-    async def pull_twitch(self, guild_id, twitch_id, username, redemption_id):
+    async def pull_twitch(self, guild_id, twitch_id, username, redemption_id, crate_name=None):
         """Trusted API for an authenticated Twitch redemption, not a Discord command.
 
         Return tier/name/value/duplicate. Repeated redemption IDs never award twice.
@@ -148,7 +148,7 @@ class Crates(commands.Cog):
         if not isinstance(redemption_id, str) or not redemption_id.strip():
             raise ValueError("A unique Twitch redemption ID is required.")
         return await self._pull_reward(guild_id, twitch_id=twitch_id,
-                                       username=username, redemption_id=redemption_id, twitch_source="points")
+                                       username=username, redemption_id=redemption_id, twitch_source="points", selected_crate=crate_name)
 
     async def pull_twitch_command(self, guild_id, twitch_id, username, message_id, message):
         """Trusted API for an authenticated Twitch chat command.
@@ -176,7 +176,7 @@ class Crates(commands.Cog):
         return max((bonuses.get(str(role.id), 0) for role in member.roles), default=0)
 
     async def _pull_reward(self, guild_id, *, discord_id=None, twitch_id=None,
-                           username=None, redemption_id=None, twitch_source="points", message=None, action_context=None):
+                           username=None, redemption_id=None, twitch_source="points", message=None, action_context=None, selected_crate=None):
         async with self.lock(guild_id):
             group = self.config.guild_from_id(guild_id)
             settings = await group.all()
@@ -191,9 +191,14 @@ class Crates(commands.Cog):
                 mode = settings.get("twitch_mode", "points")
                 if mode not in (twitch_source, "both"):
                     raise ValueError(f"Twitch {twitch_source} pulls are disabled in this server.")
-                if twitch_source == "command" and message.strip().casefold() != settings.get(
-                        "twitch_command", "!crate pull").casefold():
-                    raise ValueError("This message does not match the configured crate pull command.")
+                if twitch_source == "command":
+                    configured = settings.get("twitch_command", "!crate pull").casefold()
+                    text = message.strip().casefold()
+                    if text != configured:
+                        if text.startswith(configured + " ") and len(text[len(configured):].split()) == 1:
+                            selected_crate = text[len(configured):].strip()
+                        else:
+                            raise ValueError("This message does not match the configured crate pull command.")
                 discord_id = record["discord_id"]
             data = (await self._discord_collection(state, guild_id, discord_id)
                     if discord_id is not None else record["collection"])
@@ -208,20 +213,23 @@ class Crates(commands.Cog):
             if remaining > 0:
                 raise ValueError(f"Your next pull is available in {int(remaining) + 1} seconds.")
             bonus = self.member_luck(guild_id, discord_id, settings)
-            tier, name, value = choose_reward(settings["tiers"], bonus)
+            selected_crate = resolve_crate(settings["tiers"], selected_crate)
+            tier, name, value, reward_key = choose_reward(settings["tiers"], bonus, crate_name=selected_crate, details=True)
             award(data, name, value, now)
             pull_times[platform] = now
             data["last_pulls"] = pull_times
             tier_config = settings["tiers"][tier]
-            item = tier_config["items"].get(name, {}) if name is not None else {}
+            item = tier_config["items"][reward_key]
             result = {"tier": tier, "name": name, "value": value,
                       "emoji": tier_config.get("emoji", "\U0001f4e6"),
-                      "image": item.get("image"), "empty": name is None}
+                      "image": item.get("image"), "empty": name is None,
+                      "item_emoji": item.get("emoji", CRATE_EMOJI), "reward_key": reward_key,
+                      "item_odds": self.item_odds(tier_config, bonus)}
             if record is not None:
                 receipts[redemption_id] = result
             # Award and redemption receipt commit together, before any announcement.
             await group.collections.set(state)
-            reward_commands = copy.deepcopy(item.get("reward_commands", []))
+            reward_commands = copy.deepcopy(item.get("reward_commands", [])) if name is not None else []
         # Never run external commands while holding the collection lock. Commands
         # such as crate resetcooldown acquire it again. Persisted Twitch receipts
         # ensure duplicate events return above without repeating these effects.
@@ -295,8 +303,14 @@ class Crates(commands.Cog):
 
     @commands.guild_only()
     @commands.group(name="crate", invoke_without_command=True)
-    async def crate(self, ctx):
-        """Pull crates, view collections, and see the server leaderboard."""
+    async def crate(self, ctx, crate_name: Optional[str] = None, action: Optional[str] = None):
+        """Use crate <name> pull, or crate pull for a single configured crate."""
+        if crate_name is not None and action is not None and action.lower() == "pull":
+            await self.open_crate(ctx, crate_name)
+            return
+        if crate_name is not None:
+            await ctx.send("Use crate <name> pull, or crate pull <name>.")
+            return
         await ctx.send_help()
 
     async def embed_access(self, ctx):
@@ -323,11 +337,11 @@ class Crates(commands.Cog):
         empty = result.get("empty", result["name"] is None)
         embed = discord.Embed(
             title="Better luck next time!" if empty else "Congratulations!",
-            description=(f"{member.mention}, your crate was empty this time." if empty else
-                         f"{member.mention}, you pulled **{discord.utils.escape_markdown(result['name'])}**!"),
+            description=(f"{member.mention}, your **{result['tier']}** crate was empty this time." if empty else
+                         f"{member.mention}, your **{result['tier']}** crate contained **{discord.utils.escape_markdown(result['name'])}**!"),
             colour=0x747F8D if empty else 0xF1C40F,
         )
-        embed.add_field(name="Crate tier", value=f"{result.get('emoji', CRATE_EMOJI)} {result['tier']}")
+        embed.add_field(name="Crate", value=f"{result.get('emoji', CRATE_EMOJI)} {result['tier']}")
         embed.add_field(name="Collected value", value=f"{result['value']:,}")
         embed.set_footer(text="Try again after your cooldown." if empty else "Added to your inventory.")
         if result.get("image") and not empty:
@@ -336,35 +350,64 @@ class Crates(commands.Cog):
             embed.add_field(name="Reward commands", value="\n".join(result["command_results"]), inline=False)
         return embed
 
+    @staticmethod
+    def item_odds(crate, bonus=0):
+        weights = item_weights(crate, bonus)
+        total = sum(weights.values())
+        return [{"name": name, "emoji": crate["items"][name].get("emoji", CRATE_EMOJI),
+                 "chance": weight / total * 100, "empty": crate["items"][name].get("empty", False)}
+                for name, weight in sorted(weights.items(), key=lambda row: row[1])]
+
+    def opening_embed(self, member, result, strip):
+        embed = self.collection_embed(
+            f"Opening {result['tier']} crate...",
+            f"{member.mention} is pulling the **{result['tier']}** crate!\n\n**▼ Selected item ▼**\n"
+            + "  ·  ".join(f"**【{emoji}】**" if i == 3 else emoji for i, emoji in enumerate(strip)),
+        )
+        lines = [f"{item['emoji']} {discord.utils.escape_markdown(item['name'])}"
+                 + (" (empty)" if item.get("empty") else "") + f" — {item['chance']:.4f}%"
+                 for item in result.get("item_odds", [])]
+        # All 100 supported rewards fit across bounded fields; pages continue in
+        # companion embeds sent once, rather than repeating every animation frame.
+        pages = list(pagify("\n".join(lines), page_length=950))
+        if pages:
+            embed.add_field(name="Potential items & chances", value=pages[0], inline=False)
+        if len(pages) > 1:
+            embed.set_footer(text="Full reward chances are listed in the accompanying message.")
+        return embed, pages[1:]
+
     async def animate_pull(self, ctx, result, tiers):
-        emojis = [tier.get("emoji", "\U0001f4e6") for tier in tiers.values() if tier["items"]]
-        emojis = emojis or ["\U0001f4e6"]
+        if "item_odds" not in result:
+            result = dict(result, item_odds=self.item_odds(tiers.get(result["tier"], {"items": {}})))
+        emojis = [item["emoji"] for item in result["item_odds"]] or [CRATE_EMOJI]
         strip = [random.choice(emojis) for _ in range(7)]
-        def frame():
-            return self.collection_embed(
-                "Opening your crate...",
-                f"{ctx.author.mention}\n\n**▼** Selected crate **▼**\n"
-                + "  ·  ".join(f"**【{emoji}】**" if i == 3 else emoji for i, emoji in enumerate(strip)),
-            )
-        message = await ctx.send(content=ctx.author.mention, embed=frame(),
+        embed, extra = self.opening_embed(ctx.author, result, strip)
+        if extra:
+            # Keep each embed far below Discord's field and total text limits.
+            for page in extra:
+                await ctx.send(embed=self.collection_embed(f"{result['tier']} crate — more reward chances", page),
+                               allowed_mentions=discord.AllowedMentions.none())
+        message = await ctx.send(content=ctx.author.mention, embed=embed,
                                  allowed_mentions=discord.AllowedMentions(users=[ctx.author], roles=False, everyone=False))
-        # Limit edits and progressively increase delays; Discord may rate-limit frames.
         try:
             for index, delay in enumerate((0.5, 0.5, 0.65, 0.85, 1.1, 1.4)):
                 await asyncio.sleep(delay)
                 strip = strip[1:] + [random.choice(emojis)]
                 if index == 5:
-                    strip[3] = result.get("emoji", "\U0001f4e6")
-                await message.edit(embed=frame(), allowed_mentions=discord.AllowedMentions.none())
+                    strip[3] = result.get("item_emoji", CRATE_EMOJI)
+                frame, _ = self.opening_embed(ctx.author, result, strip)
+                await message.edit(embed=frame, allowed_mentions=discord.AllowedMentions.none())
             await asyncio.sleep(1)
             await message.edit(embed=self.result_embed(result, ctx.author), allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
-            # A deleted message or failed animation must still leave a visible result.
             await ctx.send(embed=self.result_embed(result, ctx.author), allowed_mentions=discord.AllowedMentions.none())
 
     @crate.command(name="pull")
-    async def pull(self, ctx):
-        """Open a crate with an animated reveal."""
+    async def pull(self, ctx, crate_name: Optional[str] = None):
+        """Open a named crate; omit the name when only one crate is configured."""
+        await self.open_crate(ctx, crate_name)
+
+    async def open_crate(self, ctx, crate_name=None):
         if not await self.embed_access(ctx):
             return
         key = (ctx.guild.id, ctx.author.id)
@@ -374,7 +417,7 @@ class Crates(commands.Cog):
         self.openings.add(key)
         try:
             try:
-                result = await self._pull_reward(ctx.guild.id, discord_id=ctx.author.id, action_context=ctx)
+                result = await self._pull_reward(ctx.guild.id, discord_id=ctx.author.id, action_context=ctx, selected_crate=crate_name)
             except ValueError as exc:
                 await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
                 return
@@ -382,6 +425,54 @@ class Crates(commands.Cog):
             await self.animate_pull(ctx, result, tiers)
         finally:
             self.openings.discard(key)
+
+    async def deliver_store_purchase(self, guild_id, discord_id, purchase_id, kind,
+                                     tier=None, name=None, quantity=1):
+        """Trusted Store API: deliver once per purchase ID, without normal pull effects.
+
+        Purchased openings use current tier odds and role luck. Purchases do not
+        alter pull counts/cooldowns or run item reward commands.
+        """
+        if not isinstance(purchase_id, str) or not purchase_id or len(purchase_id) > 100:
+            raise ValueError("A valid purchase ID is required.")
+        if kind not in {"item", "crate"} or not isinstance(quantity, int) or isinstance(quantity, bool) or not 1 <= quantity <= 1000:
+            raise ValueError("Invalid Store reward.")
+        if kind == "crate" and quantity != 1:
+            raise ValueError("Purchase one crate opening at a time.")
+        async with self.lock(guild_id):
+            group = self.config.guild_from_id(guild_id)
+            settings = await group.all()
+            state = settings["collections"]
+            data = await self._discord_collection(state, guild_id, discord_id)
+            receipts = data.setdefault("store_receipts", {})
+            if purchase_id in receipts:
+                return copy.deepcopy(receipts[purchase_id])
+            if not settings["enabled"]:
+                raise ValueError("Crates is currently disabled in this server.")
+            named_opening = kind == "crate" and tier is not None
+            if kind == "crate":
+                bonus = self.member_luck(guild_id, discord_id, settings)
+                tier, name, value, reward_key = choose_reward(
+                    settings["tiers"], bonus, crate_name=tier, details=True)
+                entry = settings["tiers"][tier]
+                item = entry["items"][reward_key]
+            else:
+                entry = settings["tiers"].get(tier, {})
+                item = entry.get("items", {}).get(name)
+                if item is None or item.get("empty"):
+                    raise ValueError("The listed collectible is no longer available.")
+                value = item["value"]
+            if name is not None:
+                data["inventory"][name] = data["inventory"].get(name, 0) + quantity
+                data["value"] += value * quantity
+            result = {"tier": tier, "name": name, "value": value * quantity,
+                      "quantity": quantity, "empty": name is None,
+                      "emoji": entry.get("emoji", CRATE_EMOJI), "image": item.get("image"),
+                      "item_emoji": item.get("emoji", CRATE_EMOJI),
+                      "item_odds": self.item_odds(entry, bonus if named_opening else 0)}
+            receipts[purchase_id] = result
+            await group.collections.set(state)
+            return copy.deepcopy(result)
 
     async def grant_item(self, guild_id, discord_id, tier, name, quantity):
         """Grant configured collectibles without changing pulls or cooldowns."""
@@ -545,7 +636,6 @@ class Crates(commands.Cog):
         """Show settings, items, and effective tier/item chances."""
         settings = await self.config.guild(ctx.guild).all()
         tiers = settings["tiers"]
-        total = sum(t["weight"] for t in tiers.values() if t["items"])
         lines = [f"Pulls enabled: {settings['enabled']} | Cooldown: {settings['cooldown']:,} seconds"]
         channel_id = settings.get("command_channel")
         lines.append(f"Crate command channel: <#{channel_id}>" if channel_id else "Crate command channel: any channel")
@@ -556,8 +646,7 @@ class Crates(commands.Cog):
         lines.append("Role luck bonuses (highest applies): " + (
             ", ".join(f"<@&{role_id}> +{bonus:g}%" for role_id, bonus in bonuses.items()) or "none"))
         for key, tier in sorted(tiers.items()):
-            chance = tier["weight"] / total * 100 if total and tier["items"] else 0
-            lines.append(f"{tier.get('emoji', CRATE_EMOJI)} **{key}** - weight {tier['weight']:g}, chance {chance:.2f}%")
+            lines.append(f"{tier.get('emoji', CRATE_EMOJI)} **{key}** - selectable crate | legacy random-store weight {tier['weight']:g}")
             item_total = sum(i["weight"] for i in tier["items"].values())
             for name, item in sorted(tier["items"].items()):
                 lines.append(f"  {discord.utils.escape_markdown(name)} - value {item['value']:,}, "
@@ -575,8 +664,8 @@ class Crates(commands.Cog):
     async def set_tier(self, ctx, tier: str, weight: float, emoji: Optional[str] = None):
         """Add/update a tier: crateset tier <tier> <weight> [emoji].
 
-        Tier names use 1-32 letters, digits, or hyphens. Weights are relative:
-        weights 3 and 1 give 75% and 25% chances among populated tiers.
+        Crate names use 1-32 letters, digits, or hyphens. Members choose the crate;
+        this weight is retained for legacy random Store openings and inventory order.
         """
         tier = tier.lower()
         if emoji is not None and not self.valid_emoji(emoji):
@@ -754,7 +843,7 @@ class Crates(commands.Cog):
 
     @crateset.command(name="luck")
     async def luck(self, ctx, role: discord.Role, percent: float):
-        """Set a role's rarity weight bonus: crateset luck @role 25.
+        """Set a role's rare-item weight bonus: crateset luck @role 25.
 
         Range 0-1000%. Highest matching role applies; bonuses do not stack.
         Zero removes the role bonus. Preview actual chances with luckshow.
@@ -780,21 +869,24 @@ class Crates(commands.Cog):
         await ctx.send("Role luck bonus removed.")
 
     @crateset.command(name="luckshow")
-    async def luckshow(self, ctx, member: Optional[discord.Member] = None):
-        """Preview base and effective tier chances for a server member."""
+    async def luckshow(self, ctx, member: Optional[discord.Member] = None, crate_name: Optional[str] = None):
+        """Preview item odds: luckshow [member] [crate name]."""
         member = member or ctx.author
         settings = await self.config.guild(ctx.guild).all()
         bonus = self.member_luck(ctx.guild.id, member.id, settings)
-        base = lucky_tier_weights(settings["tiers"])
-        boosted = lucky_tier_weights(settings["tiers"], bonus)
-        lines = [f"Luck preview for {discord.utils.escape_markdown(member.display_name)}: +{bonus:g}% rarity weight bonus"]
+        try:
+            name = resolve_crate(settings["tiers"], crate_name)
+        except ValueError as error:
+            await ctx.send(str(error), allowed_mentions=discord.AllowedMentions.none())
+            return
+        crate = settings["tiers"][name]
+        base, boosted = item_weights(crate), item_weights(crate, bonus)
         base_total, boosted_total = sum(base.values()), sum(boosted.values())
-        for key in sorted(base, key=base.get):
-            lines.append(f"**{key}**: {base[key] / base_total * 100:.4f}% base -> "
-                         f"{boosted[key] / boosted_total * 100:.4f}% with luck")
-        if not base:
-            lines.append("No populated tiers configured.")
-        lines.append("Item weights within a tier are unchanged. Highest matching role bonus applies.")
+        lines = [f"{name} crate odds for {discord.utils.escape_markdown(member.display_name)}: +{bonus:g}% luck"]
+        for item in sorted(base, key=base.get):
+            lines.append(f"**{discord.utils.escape_markdown(item)}**: {base[item] / base_total * 100:.4f}% base -> "
+                         f"{boosted[item] / boosted_total * 100:.4f}% with luck")
+        lines.append("Highest matching role bonus applies to rarer items within this crate.")
         await self.send_pages(ctx, "\n".join(lines))
 
     @crateset.command(name="channel")
@@ -892,3 +984,18 @@ class Crates(commands.Cog):
                     return
                 item["reward_commands"] = []
         await ctx.send("All reward commands cleared for this item.")
+
+    @crateset.command(name="itememoji")
+    async def itememoji(self, ctx, tier: str, emoji: str, *, name: str):
+        """Set an item's reel emoji: itememoji <crate> <emoji> <item name>."""
+        if not self.valid_emoji(emoji):
+            await ctx.send("Use a Unicode emoji or a Discord custom emoji.")
+            return
+        async with self.lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).tiers() as tiers:
+                item = tiers.get(tier.lower(), {}).get("items", {}).get(name.strip())
+                if item is None:
+                    await ctx.send("Item not found.")
+                    return
+                item["emoji"] = emoji
+        await ctx.send("Item emoji saved.")

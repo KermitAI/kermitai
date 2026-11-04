@@ -20,16 +20,44 @@ def lucky_tier_weights(tiers, bonus=0):
             for key, weight in weights.items()}
 
 
-def choose_reward(tiers, bonus=0):
+def item_weights(crate, bonus=0):
+    return lucky_tier_weights({name: {"weight": item["weight"], "items": {"reward": True}}
+                               for name, item in crate["items"].items()}, bonus)
+
+
+def resolve_crate(tiers, name=None):
+    if name is not None:
+        name = name.lower()
+        if name not in tiers:
+            raise ValueError("Crate not found. Available crates: " + ", ".join(sorted(tiers)))
+    elif len(tiers) == 1:
+        name = next(iter(tiers))
+    elif not tiers:
+        raise ValueError("No crates are configured yet.")
+    else:
+        raise ValueError("Choose a crate: " + ", ".join(sorted(tiers)) + ". Use crate <name> pull.")
+    if not tiers[name]["items"]:
+        raise ValueError(f"The {name} crate has no items configured yet.")
+    return name
+
+
+def choose_reward(tiers, bonus=0, crate_name=None, details=False):
     # Empty tiers never participate, so an opening always awards an item.
     available = [(key, tier) for key, tier in tiers.items() if tier["items"]]
     if not available:
         raise ValueError("No tiers with items are configured yet.")
-    weights = lucky_tier_weights(tiers, bonus)
-    key, tier = random.choices(available, weights=[weights[key] for key, _ in available])[0]
+    if crate_name is None:
+        weights = lucky_tier_weights(tiers, bonus)
+        key, tier = random.choices(available, weights=[weights[key] for key, _ in available])[0]
+        weights = {name: item["weight"] for name, item in tier["items"].items()}
+    else:
+        key = resolve_crate(tiers, crate_name)
+        tier = tiers[key]
+        weights = item_weights(tier, bonus)
     items = list(tier["items"].items())
-    name, item = random.choices(items, weights=[i["weight"] for _, i in items])[0]
-    return key, (None if item.get("empty", False) else name), (0 if item.get("empty", False) else item["value"])
+    name, item = random.choices(items, weights=[weights[name] for name, _ in items])[0]
+    result = (key, (None if item.get("empty", False) else name), (0 if item.get("empty", False) else item["value"]))
+    return result + (name,) if details else result
 
 
 def award(data, name, value, now):

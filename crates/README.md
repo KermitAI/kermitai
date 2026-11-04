@@ -5,7 +5,7 @@ Load with `[p]load crates` after installing through your normal cog workflow.
 
 ## Member commands
 
-- `[p]crate pull` selects a populated tier by weight, then one item within that tier by weight. Displays an animated emoji reel that slows onto the selected tier, then reveals the item in an embed and mentions the player. Awards one item unless the selected reward is configured as an empty pull.
+- `[p]crate <crate-name> pull` (for example `crate knives pull`) selects a named crate and rolls one of its items. `[p]crate pull <crate-name>` is an alternative. `[p]crate pull` chooses automatically only when exactly one crate is configured; otherwise it lists the crate names. If a crate name matches a built-in subcommand such as `inventory`, use the `crate pull <name>` form. Displays an animated reel of that crate's item emojis that slows onto the selected reward, then reveals the item in an embed and mentions the player. The opening embed states the crate being opened and lists item probabilities, including the member's role luck. Long reward lists continue in companion embeds. Awards one item unless the selected reward is configured as an empty pull.
 - `[p]crate inventory [member]` shows an embed with tier icons, item quantities, unit values and stack values (for example, `1x Value: 10 | x19 Value: 190`), collection totals, and collected value. Per-item values use the current catalog; removed items show value unavailable. If an item name exists in multiple tiers, its lowest-weight tier supplies the displayed value. The overall collected value remains the historical score earned at award time, so it may differ after catalog value changes. Items are ordered by current tier weight, lowest (rarest) first, with alphabetical ties. Items no longer in the catalog appear last. Same-name items in multiple tiers use the lowest tier weight; item weights within a tier do not affect inventory order.
 - `[p]crate leaderboard` lists all current server members with at least one successful pull, ordered by collected value, then pull count. Zero-value rewards still qualify. Uses paginated embeds with medals for the top three and readable value/pull totals.
 
@@ -48,6 +48,7 @@ Requires Red admin access or Manage Server permission. All settings are per serv
 - `[p]crateset show` displays settings, tiers, items, and effective probabilities.
 - `[p]crateset tier <tier> <weight> [emoji]` creates or updates a tier. The optional emoji can be Unicode or a Discord custom emoji; existing tiers default to a crate emoji. Omitting it preserves the existing emoji. Names use letters, numbers, or hyphens (up to 32 characters); names are normalized to lowercase.
 - `[p]crateset item <tier> <weight> <value> <item name>` creates or updates an item. The remainder of the command is its name, so spaces do not need quotes. Names are case sensitive and up to 100 characters.
+- `[p]crateset itememoji <crate> <emoji> <item name>` sets the emoji used for that reward in the reel. Supports Unicode and Discord custom emojis; existing items default to a crate emoji. Images continue to use `itemimage`.
 - `[p]crateset tieremoji <tier> <emoji>` changes an existing tier's emoji.
 - `[p]crateset itemimage <tier> <URL|none> <item name>` sets an optional public HTTP(S) image URL for the reward reveal, or clears it with `none`. Discord must be able to load the image; URLs are not fetched by the bot.
 - `[p]crateset itemempty <tier> <true|false> <item name>` makes that weighted reward an empty pull: no item or value, but it still counts as a pull and consumes the cooldown. Set false to restore its normal reward behavior. Nothing is marked empty by default; a zero-value item is still a collectible.
@@ -57,7 +58,7 @@ Requires Red admin access or Manage Server permission. All settings are per serv
 - `[p]crateset sharedcooldown <true|false>` controls whether linked Discord and Twitch accounts share a pull cooldown. Default: true. False gives Discord and Twitch independent timers using the same configured duration. Twitch channel-point and chat-command pulls always share the Twitch timer. Unlinked accounts already have independent collections and timers.
 - `[p]crateset enabled <true|false>` enables or disables pulls. Default: true. Inventories and leaderboards remain available.
 
-Create at least one tier and add at least one item to it before pulling. Empty tiers are excluded from selection. Tier weights 3 and 1 produce 75% and 25% tier probabilities. Item chances are calculated separately within the chosen tier. Weights must be finite, positive, and no more than 1,000,000. Up to 50 tiers and 100 items per tier are supported.
+Existing tier records now act as selectable crates; no inventory or reward definitions are migrated or deleted. Create a crate with `crateset tier`, then add its items with `crateset item`. A selected crate with no items cannot be opened. Crate weights do not affect a named pull; item weights inside that crate determine probabilities. Item weights 3 and 1 give 75% and 25% base chances. Crate weights are retained for inventory ordering and older random Store listings. Weights must be finite, positive, and no more than 1,000,000. Up to 50 tiers and 100 items per tier are supported.
 
 Value is a nonnegative leaderboard score (up to 1,000,000,000), independent of Red's bank. Scores are recorded at pull time: later changes do not alter earlier awards. Items with the exact same name stack in inventory across tiers. Renaming means removing the old definition and adding a new one; existing inventory keeps the original name. Removing tiers/items preserves inventories, scores, and pull history.
 
@@ -119,35 +120,28 @@ item result, not the later command execution report.
 
 ## Role luck bonuses
 
-- `[p]crateset luck <role> <percent>` sets a rarity weight bonus, for example
-  `[p]crateset luck @ServerBoosters 25`. Accepts a role mention or quoted role name.
-  Allowed bonus: 0–1,000%; zero removes the bonus.
-- `[p]crateset luckremove <role>` removes a role bonus.
-- `[p]crateset luckshow [member]` previews that member's base and effective tier
-  probabilities. `[p]crateset show` also lists configured role bonuses.
+- `[p]crateset luck <role> <percent>` sets a rarity weight bonus. Allowed bonus:
+  0–1,000%; zero removes it. No bonuses are enabled by default.
+- `[p]crateset luckremove <role>` removes a bonus.
+- `[p]crateset luckshow [member] [crate-name]` previews base and effective item
+  probabilities for that member and crate. With multiple crates, specify both
+  the member and crate, for example `luckshow @member knives`.
 
-Requires the same Red admin/Manage Server permissions as other crate settings.
-No role bonuses are enabled by default. The highest bonus among the member's
-current roles applies; multiple bonuses do not stack. Deleted roles stop matching.
+For named pulls, role luck now boosts **rarer items inside the selected crate**.
+The highest matching role bonus applies; bonuses do not stack. The commonest item
+keeps its weight; the rarest gets the full multiplier; intermediate items receive
+proportional increases. Formula:
+`adjusted = weight * (1 + percent/100 * (max_weight-weight)/(max_weight-min_weight))`.
+A 25% bonus means up to 25% more relative weight, not 25 percentage points added
+straight to the final probability. Equal-weight rewards or a single item keep the
+same odds. The opening embed and luckshow use the same probabilities as selection.
+Empty rewards participate by their configured weight too.
 
-Luck adjusts the relative weights of populated tiers: the commonest tier keeps
-its weight, the rarest receives the full percentage multiplier, and intermediate
-tiers receive a proportional boost based on their weight between those extremes.
-Formula: `adjusted = weight * (1 + percent/100 * (max_weight-weight)/(max_weight-min_weight))`.
-The resulting weights are normalized into probabilities. A 25% bonus therefore
-means up to 25% more relative weight, not 25 percentage points added to the pull
-chance. Use `luckshow` to see exact effective chances. Equal-weight tiers or a
-single populated tier have no rarity difference, so their chances stay unchanged.
-Empty tiers are excluded, and item weights within the selected tier stay unchanged.
-Luck targets low tier weight, regardless of item value or empty-reward settings.
-
-Discord pulls use current cached server roles. Twitch pulls use those same roles
-when the Twitch account is verified and linked to a current Discord member;
-unlinked Twitch users and unavailable member records receive no bonus. Role
-bonuses do not change cooldowns, saved tier weights, manual item grants, inventory
-ordering, or previously awarded results. Twitch event retries return the saved
-result without rerolling even if roles changed. Enable Server Members intent for
-reliable membership and role information.
+Discord pulls use the member's current cached roles. Verified linked Twitch users
+use the linked Discord member's roles; unlinked or unavailable members get no bonus.
+Legacy random Store listings retain tier-based luck, while named Store openings
+use item-based luck. Cooldowns, manual grants, saved base weights, and already saved
+results are unaffected. Enable Server Members intent for reliable role information.
 
 ## Discord presentation
 
@@ -155,8 +149,9 @@ The bot needs **Embed Links**, View Channel, and Send Messages permissions. Cust
 emojis must be usable by the bot (external emojis may require Use External Emojis).
 The Discord pull reveal takes approximately six seconds with a limited number of
 message edits. Discord rate limits can make it slower. Each member may have one
-opening animation active per server. The reel is decorative; actual reward odds
-are determined by the configured tier and item weights before the animation.
+opening animation active per server. The reel is decorative; named-pull odds are determined by the selected crate's
+item weights and role luck before the animation. The reel stops on the saved
+reward's item emoji, not the crate emoji.
 
 Reward data and cooldown are saved before presentation. If an edit fails, the bot
 tries to post the final result separately. If Discord delivery fails entirely, the
@@ -184,7 +179,7 @@ for the leaderboard once pulled, even with zero value and an empty inventory.
   pull methods. Default: `points`, preserving existing integrations.
 - `[p]crateset twitchcommand <command text>` sets the exact chat command.
   Default: `!crate pull`. Matching ignores case and surrounding whitespace;
-  extra arguments do not match. Setting a command does not enable command pulls.
+  a crate name may follow the configured command, such as `!crate pull knives`. Other extra arguments do not match. Setting a command does not enable command pulls.
 
 Both Twitch methods award to the same collection and share the Twitch cooldown.
 Sharing that cooldown with linked Discord accounts is controlled by `sharedcooldown`. Choosing `off` affects only Twitch pulls.
@@ -206,7 +201,7 @@ A separate trusted integration must verify the broadcaster-to-server mapping,
 Twitch events, and account ownership before calling these methods on
 `bot.get_cog("Crates")`:
 
-- `await cog.pull_twitch(guild_id, twitch_id, username, redemption_id)` awards one
+- `await cog.pull_twitch(guild_id, twitch_id, username, redemption_id, crate_name=None)` awards one
   reward and returns `tier`, `name`, `value`, `emoji`, `image`, `empty`, and `duplicate`. Empty outcomes return `name=None` and `value=0`. Older saved receipts may lack the new presentation fields, so callers should use defaults. New receipts preserve the image and emoji at pull time. Use permanent numeric
   Twitch IDs as strings, not usernames, for identity. The latest username is saved
   for display. Redemption IDs must come from Twitch, not user input. Duplicate
@@ -233,6 +228,11 @@ Twitch events, and account ownership before calling these methods on
   of deleted historical redemptions. Red's Discord deletion hook removes the
   Discord collection and linked Twitch records as well.
 
+Twitch channel-point callers must pass `crate_name` when multiple crates exist.
+Twitch chat supports the configured command followed by a crate name. With one
+configured crate, omitting the name opens it automatically. Duplicate receipts
+return the original result regardless of a later crate argument.
+
 All pulls use the server's existing enabled setting, catalog, and cooldown duration.
 Linked accounts share a cooldown by default; `sharedcooldown false` separates Discord
 and Twitch timers. A channel-point payment does not bypass the Twitch timer.
@@ -249,3 +249,30 @@ Twitch subscription, OAuth, role sync, or live showcase delivery is implemented 
 Account updates, awards, and redemption receipts are serialized per server and
 saved together in the guild's `collections` configuration. Run only one process
 against a given Red instance's data; these locks do not coordinate multiple processes.
+
+
+## Separate Store cog compatibility
+
+The optional `Store` cog uses Red's existing bank balance for guaranteed items and
+extra random crate openings. Store has its own `[p]store` / `[p]storeset` commands
+and catalog, described in `store/README.md`. No listings are installed by default.
+
+Trusted API: `await cog.deliver_store_purchase(guild_id, discord_id, purchase_id,
+kind, tier=None, name=None, quantity=1)`. `kind` is `item` or `crate`; crate quantity
+must be one, while collectible bundles accept 1–1,000. The caller is responsible
+for charging/authorizing the purchase and supplying its permanent unique ID.
+
+Delivery and receipt are saved together in the Discord collection. Retrying the
+same ID returns the original result, including when the catalog has since changed
+or Crates was disabled. Pass `tier` to purchase a named crate using item odds and role luck. Omitting it
+preserves legacy Store random-crate selection. Purchased openings do
+not increase normal pull counts, change platform cooldowns, or run reward commands.
+Guaranteed purchases reject removed/empty rewards. Empty random outcomes are valid
+purchases, with no inventory item. Purchases add collectible value and quantities
+to the shared inventory. The normal crate command channel restriction does not
+apply to this API; Store enforces its own channel and access settings.
+
+Store receipts contain purchase IDs and reward snapshots and are removed with the
+Discord collection under Red user deletion. Preserve both Store orders and Crates
+receipts in backups to maintain safe recovery. The API is for trusted cogs only;
+it is not a public command for free rewards.

@@ -6,7 +6,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 
 def decorator(*args, **kwargs):
@@ -351,7 +351,7 @@ class LuckAccountTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_highest_bonus_applies_to_discord_and_linked_twitch(self):
         self.configure_roles()
-        with patch.object(module, "choose_reward", return_value=("a", "Gem", 10)) as choose:
+        with patch.object(module, "choose_reward", return_value=("a", "Gem", 10, "Gem")) as choose:
             await self.cog._pull_reward(1, discord_id=99)
             self.assertEqual(choose.call_args.args[1], 50)
             await self.cog.link_verified_twitch(1, "123", "viewer", 99)
@@ -404,3 +404,85 @@ class CooldownResetTests(unittest.IsolatedAsyncioTestCase):
         data = await self.cog.get_discord_collection(1, 99)
         self.assertEqual(data["last_pull"], 0)
         self.assertEqual(data["pulls"], 2)
+
+
+class StoreDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    setUp = AccountTests.setUp
+
+    async def test_guaranteed_purchase_is_idempotent_and_preserves_history(self):
+        await self.cog._pull_reward(1, discord_id=99)
+        before = await self.cog.get_discord_collection(1, 99)
+        first = await self.cog.deliver_store_purchase(1, 99, "order1", "item", "a", "Gem", 3)
+        second = await self.cog.deliver_store_purchase(1, 99, "order1", "item", "a", "Gem", 3)
+        self.assertEqual(first, second)
+        after = await self.cog.get_discord_collection(1, 99)
+        self.assertEqual(after["inventory"], {"Gem": 4})
+        self.assertEqual(after["value"], 40)
+        for field in ("pulls", "last_pull", "last_pulls"):
+            self.assertEqual(after[field], before[field])
+
+    async def test_random_purchase_uses_odds_without_normal_pull_side_effects(self):
+        self.cog.config.guild.data["cooldown"] = 999999
+        self.cog.config.member_from_ids(1, 99).data["last_pull"] = 9999999999
+        with patch.object(self.cog, "run_reward_commands", new_callable=AsyncMock) as effects:
+            await self.cog.deliver_store_purchase(1, 99, "order2", "crate")
+            effects.assert_not_awaited()
+        data = await self.cog.get_discord_collection(1, 99)
+        self.assertEqual(data["inventory"], {"Gem": 1})
+        self.assertEqual(data["pulls"], 0)
+        self.assertEqual(data["last_pull"], 9999999999)
+
+    async def test_empty_purchased_crate_and_linked_collection(self):
+        await self.cog.link_verified_twitch(1, "123", "viewer", 99)
+        self.cog.config.guild.data["tiers"]["a"]["items"]["Gem"]["empty"] = True
+        result = await self.cog.deliver_store_purchase(1, 99, "order3", "crate")
+        self.assertTrue(result["empty"])
+        self.assertEqual((await self.cog.get_twitch_collection(1, "123"))["inventory"], {})
+        self.assertEqual((await self.cog.get_discord_collection(1, 99))["pulls"], 0)
+
+    async def test_receipt_survives_disabled_catalog_and_invalid_items_do_not_deliver(self):
+        await self.cog.deliver_store_purchase(1, 99, "order4", "item", "a", "Gem")
+        self.cog.config.guild.data.update(enabled=False, tiers={})
+        result = await self.cog.deliver_store_purchase(1, 99, "order4", "item", "a", "Gem")
+        self.assertEqual(result["name"], "Gem")
+        with self.assertRaises(ValueError):
+            await self.cog.deliver_store_purchase(1, 99, "new", "item", "a", "Gem")
+        self.assertEqual((await self.cog.get_discord_collection(1, 99))["inventory"], {"Gem": 1})
+
+
+class NamedCrateAccountTests(unittest.IsolatedAsyncioTestCase):
+    setUp = AccountTests.setUp
+
+    def add_second(self):
+        self.cog.config.guild.data["tiers"]["gems"] = {
+            "weight": 1000, "items": {"Ruby": {"weight": 1, "value": 50, "emoji": "R"}}}
+
+    async def test_named_pull_and_single_crate_fallback(self):
+        await self.cog._pull_reward(1, discord_id=99)
+        self.add_second()
+        before = await self.cog.get_discord_collection(1, 99)
+        with self.assertRaises(ValueError):
+            await self.cog._pull_reward(1, discord_id=99)
+        self.assertEqual(before, await self.cog.get_discord_collection(1, 99))
+        result = await self.cog._pull_reward(1, discord_id=99, selected_crate="gems")
+        self.assertEqual(result["name"], "Ruby")
+        self.assertEqual(result["item_emoji"], "R")
+        self.assertEqual(result["item_odds"][0]["chance"], 100)
+
+    async def test_twitch_named_selection_and_deduplication(self):
+        self.add_second()
+        self.cog.config.guild.data["twitch_mode"] = "both"
+        result = await self.cog.pull_twitch_command(1, "123", "viewer", "m1", "!crate pull gems")
+        self.assertEqual(result["name"], "Ruby")
+        replay = await self.cog.pull_twitch_command(1, "123", "viewer", "m1", "!crate pull a")
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["name"], "Ruby")
+        result = await self.cog.pull_twitch(1, "123", "viewer", "r1", crate_name="gems")
+        self.assertEqual(result["name"], "Ruby")
+
+    async def test_store_can_deliver_a_specified_crate_and_keep_normal_pull_stats(self):
+        self.add_second()
+        result = await self.cog.deliver_store_purchase(1, 99, "shop-gems", "crate", tier="gems")
+        self.assertEqual(result["name"], "Ruby")
+        self.assertEqual(result["item_emoji"], "R")
+        self.assertEqual((await self.cog.get_discord_collection(1, 99))["pulls"], 0)

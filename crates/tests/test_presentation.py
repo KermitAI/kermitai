@@ -52,7 +52,8 @@ class PresentationTests(unittest.IsolatedAsyncioTestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
         self.result = {"tier": "rare", "name": "Gem", "value": 10,
-                       "emoji": "X", "image": "https://example.org/gem.png", "empty": False}
+                       "emoji": "C", "item_emoji": "X", "image": "https://example.org/gem.png", "empty": False,
+                       "item_odds": [{"name": "Gem", "emoji": "X", "chance": 100, "empty": False}]}
 
     def test_success_and_empty_embeds(self):
         embed = self.cog.result_embed(self.result, self.member)
@@ -167,6 +168,24 @@ class PresentationTests(unittest.IsolatedAsyncioTestCase):
             saved["inventory"]["Old item"] = 2
             await self.cog.inventory(ctx)
             self.assertIn("Value: unavailable (item removed)", ctx.send.call_args.kwargs["embed"].description)
+
+
+    async def test_named_crate_syntax_routes_to_opening(self):
+        ctx = types.SimpleNamespace(send=AsyncMock())
+        with patch.object(self.cog, "open_crate", new_callable=AsyncMock) as opening:
+            await self.cog.crate(ctx, "knives", "pull")
+            opening.assert_awaited_once_with(ctx, "knives")
+            opening.reset_mock()
+            await self.cog.pull(ctx, "gems")
+            opening.assert_awaited_once_with(ctx, "gems")
+
+    def test_opening_embed_names_crate_and_lists_item_odds(self):
+        embed, extra = self.cog.opening_embed(self.member, self.result, ["X"] * 7)
+        self.assertIn("rare", embed.title)
+        self.assertIn("pulling the **rare** crate", embed.description)
+        self.assertIn("Gem", embed.fields[0]["value"])
+        self.assertIn("100.0000%", embed.fields[0]["value"])
+        self.assertEqual(extra, [])
 
 
 class ChannelRestrictionTests(unittest.IsolatedAsyncioTestCase):

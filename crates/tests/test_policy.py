@@ -99,6 +99,39 @@ class LuckTests(unittest.TestCase):
         self.assertEqual(policy.lucky_tier_weights({}, 100), {})
 
 
+class NamedCratePolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.tiers = {
+            "knives": {"weight": 1, "items": {"Bronze": {"weight": 3, "value": 10},
+                                                   "Diamond": {"weight": 1, "value": 100}}},
+            "gems": {"weight": 999, "items": {"Ruby": {"weight": 1, "value": 50}}},
+        }
+
+    def test_multiple_crates_require_explicit_selection(self):
+        with self.assertRaises(ValueError):
+            policy.resolve_crate(self.tiers)
+        self.assertEqual(policy.resolve_crate(self.tiers, "KNIVES"), "knives")
+        self.assertEqual(policy.resolve_crate({"knives": self.tiers["knives"]}), "knives")
+        for tiers, name in (({}, None), (self.tiers, "missing"), ({"empty": {"items": {}}}, None)):
+            with self.assertRaises(ValueError):
+                policy.resolve_crate(tiers, name)
+
+    def test_selected_crate_does_not_roll_other_crates_and_luck_changes_item_weights(self):
+        calls = []
+        def pick(population, *, weights):
+            calls.append(weights)
+            return [population[-1]]
+        with patch.object(policy.random, "choices", side_effect=pick):
+            result = policy.choose_reward(self.tiers, 50, crate_name="knives", details=True)
+        self.assertEqual(result, ("knives", "Diamond", 100, "Diamond"))
+        self.assertEqual(calls, [[3, 1.5]])
+
+    def test_empty_reward_preserves_selected_item_key(self):
+        self.tiers["gems"]["items"]["Ruby"]["empty"] = True
+        self.assertEqual(policy.choose_reward(self.tiers, crate_name="gems", details=True),
+                         ("gems", None, 0, "Ruby"))
+
+
 class DurationTests(unittest.TestCase):
     def test_shorthand_and_plain_seconds(self):
         cases = {"1m": 60, "3h": 10800, "1d": 86400, "2w": 1209600,
