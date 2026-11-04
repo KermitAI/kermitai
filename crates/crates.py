@@ -176,7 +176,7 @@ class Crates(commands.Cog):
         return max((bonuses.get(str(role.id), 0) for role in member.roles), default=0)
 
     async def _pull_reward(self, guild_id, *, discord_id=None, twitch_id=None,
-                           username=None, redemption_id=None, twitch_source="points", message=None, action_context=None, selected_crate=None):
+                           username=None, redemption_id=None, twitch_source="points", message=None, action_context=None, selected_crate=None, defer_reward_commands=False):
         async with self.lock(guild_id):
             group = self.config.guild_from_id(guild_id)
             settings = await group.all()
@@ -233,9 +233,12 @@ class Crates(commands.Cog):
         # Never run external commands while holding the collection lock. Commands
         # such as crate resetcooldown acquire it again. Persisted Twitch receipts
         # ensure duplicate events return above without repeating these effects.
-        outcomes = await self.run_reward_commands(guild_id, discord_id, reward_commands, action_context)
-        if outcomes:
-            result["command_results"] = outcomes
+        if defer_reward_commands:
+            result["pending_reward_commands"] = reward_commands
+        else:
+            outcomes = await self.run_reward_commands(guild_id, discord_id, reward_commands, action_context)
+            if outcomes:
+                result["command_results"] = outcomes
         return dict(result, duplicate=False)
 
     @staticmethod
@@ -346,8 +349,6 @@ class Crates(commands.Cog):
         embed.set_footer(text="Try again after your cooldown." if empty else "Added to your inventory.")
         if result.get("image") and not empty:
             embed.set_image(url=result["image"])
-        if result.get("command_results"):
-            embed.add_field(name="Reward commands", value="\n".join(result["command_results"]), inline=False)
         return embed
 
     @staticmethod
@@ -417,12 +418,17 @@ class Crates(commands.Cog):
         self.openings.add(key)
         try:
             try:
-                result = await self._pull_reward(ctx.guild.id, discord_id=ctx.author.id, action_context=ctx, selected_crate=crate_name)
+                result = await self._pull_reward(ctx.guild.id, discord_id=ctx.author.id, action_context=ctx,
+                                                selected_crate=crate_name, defer_reward_commands=True)
             except ValueError as exc:
                 await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
                 return
             tiers = await self.config.guild(ctx.guild).tiers()
             await self.animate_pull(ctx, result, tiers)
+            outcomes = await self.run_reward_commands(
+                ctx.guild.id, ctx.author.id, result.pop("pending_reward_commands", []), ctx)
+            if outcomes:
+                await ctx.send("\n".join(outcomes), allowed_mentions=discord.AllowedMentions.none())
         finally:
             self.openings.discard(key)
 
