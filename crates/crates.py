@@ -216,6 +216,9 @@ class Crates(commands.Cog):
             selected_crate = resolve_crate(settings["tiers"], selected_crate)
             tier, name, value, reward_key = choose_reward(settings["tiers"], bonus, crate_name=selected_crate, details=True)
             award(data, name, value, now)
+            stats = data.setdefault("crate_stats", {}).setdefault(tier, {"pulls": 0, "value": 0})
+            stats["pulls"] += 1
+            stats["value"] += value
             pull_times[platform] = now
             data["last_pulls"] = pull_times
             tier_config = settings["tiers"][tier]
@@ -310,6 +313,9 @@ class Crates(commands.Cog):
         """Use crate <name> pull, or crate pull for a single configured crate."""
         if crate_name is not None and action is not None and action.lower() == "pull":
             await self.open_crate(ctx, crate_name)
+            return
+        if crate_name is not None and action is not None and action.lower() in {"leaderboard", "lb"}:
+            await self.show_leaderboard(ctx, crate_name)
             return
         if crate_name is not None:
             await ctx.send("Use crate <name> pull, or crate pull <name>.")
@@ -611,16 +617,51 @@ class Crates(commands.Cog):
                                    summary, str(member.display_avatar.url))
 
     @crate.command(name="leaderboard", aliases=["lb"])
-    async def leaderboard(self, ctx):
-        """Display the server's collectors, ranked by value then pulls."""
+    async def leaderboard(self, ctx, crate_name: Optional[str] = None):
+        """Show crate positions, or the detailed leaderboard for a named crate."""
+        await self.show_leaderboard(ctx, crate_name)
+
+    async def show_leaderboard(self, ctx, crate_name=None):
         if not await self.embed_access(ctx):
             return
         async with self.lock(ctx.guild.id):
+            tiers = await self.config.guild(ctx.guild).tiers()
             members = await self.config.all_members(ctx.guild)
             state = await self.config.guild(ctx.guild).collections()
             members.update({int(uid): data for uid, data in state["discord"].items()})
         current = {member.id: member for member in ctx.guild.members}
         rows = ranking(members, set(current))
+        title = "\U0001f3c6 Crates leaderboard"
+        if crate_name is not None:
+            crate_name = crate_name.lower()
+            if crate_name not in tiers:
+                await ctx.send("Unknown crate.")
+                return
+        elif len(tiers) == 1:
+            crate_name = next(iter(tiers))
+
+        def crate_ranking(tier):
+            stats = {uid: data["crate_stats"][tier] for uid, data in rows
+                     if tier in data.get("crate_stats", {})}
+            return ranking(stats, set(current))
+
+        if crate_name is None and len(tiers) > 1:
+            positions = {uid: [] for uid, _ in rows}
+            for tier in sorted(tiers):
+                label = discord.utils.escape_markdown(tier)
+                ranks = {uid: rank for rank, (uid, _) in enumerate(crate_ranking(tier), 1)}
+                for uid in positions:
+                    rank = f"#{ranks[uid]}" if uid in ranks else "Unranked"
+                    positions[uid].append(f"{label} **{rank}**")
+            lines = [f"**{discord.utils.escape_markdown(current[uid].display_name)}**\n"
+                     + " · ".join(positions[uid]) for uid, _ in rows]
+            await self.send_collection(ctx, title, lines or ["No crates pulled yet. Be the first!"],
+                                       "Per-crate positions use recorded crate pulls.")
+            return
+        if crate_name is not None:
+            rows = crate_ranking(crate_name)
+            title = f"\U0001f3c6 {crate_name} leaderboard"
+
         medals = ("\U0001f947", "\U0001f948", "\U0001f949")
         lines = []
         for position, (uid, data) in enumerate(rows, 1):
@@ -628,7 +669,7 @@ class Crates(commands.Cog):
             name = discord.utils.escape_markdown(current[uid].display_name)
             lines.append(f"{badge} **{name}**\n{data['value']:,} value · {data['pulls']:,} pulls")
         summary = f"**{len(rows):,}** collectors | Ranked by collected value, then pulls"
-        await self.send_collection(ctx, "\U0001f3c6 Crates leaderboard", lines or ["No crates pulled yet. Be the first!"], summary)
+        await self.send_collection(ctx, title, lines or ["No recorded pulls for this leaderboard yet."], summary)
 
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)

@@ -85,6 +85,10 @@ def merge_collections(target, source):
         target["inventory"][name] = target["inventory"].get(name, 0) + quantity
     target["pulls"] += source["pulls"]
     target["value"] += source["value"]
+    for tier, source_stats in source.get("crate_stats", {}).items():
+        target_stats = target.setdefault("crate_stats", {}).setdefault(tier, {"pulls": 0, "value": 0})
+        target_stats["pulls"] += source_stats["pulls"]
+        target_stats["value"] += source_stats["value"]
     if "last_pulls" in target or "last_pulls" in source:
         target_times, source_times = platform_pull_times(target), platform_pull_times(source)
         target["last_pulls"] = {platform: max(target_times[platform], source_times[platform])
