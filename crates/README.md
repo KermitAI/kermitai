@@ -3,11 +3,27 @@
 A Red 3.5+ cog with an empty catalog: no example tiers or rewards are installed.
 Load with `[p]load crates` after installing through your normal cog workflow.
 
+## Quick start
+
+`[p]` stands for your bot prefix. For example, use `.crate pull` if your prefix is `.`.
+Angle brackets mark required arguments and square brackets mark optional ones.
+
+```text
+[p]crateset tier knives 1
+[p]crateset item knives 0.7 10 Bronze Knife
+[p]crateset item knives 0.05 100 Diamond Knife
+[p]crateset cooldown 1h
+[p]crate knives pull
+```
+
+The item arguments are **crate, weight, value, name**. If a crate has just one
+item, any valid positive weight gives it a 100% chance.
+
 ## Member commands
 
 - `[p]crate <crate-name> pull` (for example `crate knives pull`) selects a named crate and rolls one of its items. `[p]crate pull <crate-name>` is an alternative. `[p]crate pull` chooses automatically only when exactly one crate is configured; otherwise it lists the crate names. If a crate name matches a built-in subcommand such as `inventory`, use the `crate pull <name>` form. Displays an animated reel of that crate's item emojis that slows onto the selected reward, then reveals the item in an embed and mentions the player. The opening embed states the crate being opened and lists item probabilities, including the member's role luck. Long reward lists continue in companion embeds. Awards one item unless the selected reward is configured as an empty pull.
-- `[p]crate inventory [member]` shows an embed with tier icons, item quantities, unit values and stack values (for example, `1x Value: 10 | x19 Value: 190`), collection totals, and collected value. Per-item values use the current catalog; removed items show value unavailable. If an item name exists in multiple tiers, its lowest-weight tier supplies the displayed value. The overall collected value remains the historical score earned at award time, so it may differ after catalog value changes. Items are ordered by current tier weight, lowest (rarest) first, with alphabetical ties. Items no longer in the catalog appear last. Same-name items in multiple tiers use the lowest tier weight; item weights within a tier do not affect inventory order.
-- `[p]crate leaderboard` lists all current server members with at least one successful pull, ordered by collected value, then pull count. Zero-value rewards still qualify. Uses paginated embeds with medals for the top three and readable value/pull totals.
+- `[p]crate inventory [member]` (alias `inv`) shows an embed with tier icons, item quantities, unit values and stack values (for example, `1x Value: 10 | x19 Value: 190`), collection totals, and collected value. Per-item values use the current catalog; removed items show value unavailable. If an item name exists in multiple tiers, its lowest-weight tier supplies the displayed value. The overall collected value remains the historical score earned at award time, so it may differ after catalog value changes. Items are ordered by current tier weight, lowest (rarest) first, with alphabetical ties. Items no longer in the catalog appear last. Same-name items in multiple tiers use the lowest tier weight; item weights within a tier do not affect inventory order.
+- `[p]crate leaderboard [crate-name]` (alias `lb`) shows each collector's position in every configured crate when several crates exist and no name is supplied. With one crate, it opens that crate's detailed leaderboard automatically. Use `[p]crate leaderboard knives` or `[p]crate knives leaderboard` to open the detailed standings for Knives. Detailed standings rank by value earned from that crate, then by pull count, with medals for the top three. Zero-value pulls count. Older combined pull totals cannot be assigned to a crate, so only pulls recorded by crate contribute to these positions. Members without recorded pulls for a crate show as **Unranked** in the overview.
 
 ## Moderator item grants
 
@@ -54,8 +70,6 @@ Requires Red admin access or Manage Server permission. All settings are per serv
 - `[p]crateset itemempty <tier> <true|false> <item name>` makes that weighted reward an empty pull: no item or value, but it still counts as a pull and consumes the cooldown. Set false to restore its normal reward behavior. Nothing is marked empty by default; a zero-value item is still a collectible.
 - `[p]crateset removetier <tier>` removes a tier and its reward definitions from future pulls.
 - `[p]crateset removeitem <tier> <item name>` removes a reward from future pulls.
-- `[p]crateset cooldown <duration>` sets the wait between successful pulls. Accepts `s` (seconds), `m` (minutes), `h` (hours), `d` (days), and `w` (weeks), such as `1m`, `3h`, `1d`, `2w`, or `1h 30m`. Plain seconds still work. Default: `0` (unlimited). Maximum: 365 days. Use `1d` for a 24-hour wait. This is a rolling cooldown, not a calendar-day reset.
-- `[p]crateset sharedcooldown <true|false>` controls whether linked Discord and Twitch accounts share a pull cooldown. Default: true. False gives Discord and Twitch independent timers using the same configured duration. Twitch channel-point and chat-command pulls always share the Twitch timer. Unlinked accounts already have independent collections and timers.
 - `[p]crateset enabled <true|false>` enables or disables pulls. Default: true. Inventories and leaderboards remain available.
 
 Existing tier records now act as selectable crates; no inventory or reward definitions are migrated or deleted. Create a crate with `crateset tier`, then add its items with `crateset item`. A selected crate with no items cannot be opened. Crate weights do not affect a named pull; item weights inside that crate determine probabilities. Item weights 3 and 1 give 75% and 25% base chances. Crate weights are retained for inventory ordering and older random Store listings. Weights must be finite, positive, and no more than 1,000,000. Up to 50 tiers and 100 items per tier are supported.
@@ -65,6 +79,23 @@ Value is a nonnegative leaderboard score (up to 1,000,000,000), independent of R
 Persistent member data includes inventory, pull count, collected value, and last pull time. Supports Red's user data deletion requests. Awards and cooldowns are saved together before the announcement; if Discord cannot deliver the announcement, the reward remains in inventory. Concurrent pulls are serialized per server to prevent duplicate cooldown claims.
 
 The leaderboard uses Discord's cached server member list; enable the bot's Server Members intent for complete membership information.
+
+## Cooldowns
+
+| Command | Effect |
+| --- | --- |
+| `[p]crateset cooldownmode user` | Default. Each member waits the configured duration after their own pull. |
+| `[p]crateset cooldownmode global` | After any pull, everyone sharing that server timer waits the configured duration. |
+| `[p]crateset cooldownmode daily <HH:MM> [timezone]` | Each member gets one pull per reset window. Everyone becomes eligible at the scheduled time. Defaults to UTC if the timezone is omitted. |
+| `[p]crateset cooldown <duration>` | Sets the wait for User and Global modes. Accepts plain seconds or units such as `1m`, `3h`, `1d`, `2w`, or `1h 30m`. The default is `0` for unlimited pulls, and the maximum is 365 days. |
+| `[p]crateset sharedcooldown <true\|false>` | Defaults to true. Shares the timer across linked Discord and Twitch accounts in User and Daily modes, or across both platforms in Global mode. False gives each platform its own timer or daily eligibility. Twitch chat and channel points always share the Twitch timer. |
+| `[p]crate resetcooldown [member]` | Clears a member's timers for User or Daily mode, including linked Twitch. Defaults to yourself. |
+| `[p]crateset resetglobalcooldown` | Clears the server-wide timers for both platforms in Global mode. |
+
+Use `[p]crateset cooldownmode daily 12:00 EST` for noon at UTC−5 year-round.
+Use `[p]crateset cooldownmode daily 12:00 America/Toronto` for noon Toronto
+time with daylight saving. Daily uses a 24-hour clock. Pull eligibility applies
+across all crate names, and empty outcomes consume eligibility too.
 
 ## Optional item reward commands
 
@@ -93,8 +124,8 @@ framework; they are not posted to Discord as executable chat messages. The only
 command from Crates itself allowed as a reward action is `crate resetcooldown`
 (including its alias), to avoid direct recursive pulls or configuration changes.
 
-Discord actions run in the pull's channel after the item and cooldown are saved,
-before the reveal animation. This lets a configured cooldown reset affect the
+Discord actions run in the pull's channel after the reward is revealed.
+Commands that send their own responses can post them in that channel. This lets a configured cooldown reset affect the
 just-completed pull. Moderator give/remove operations and empty-pull rewards do
 not trigger commands. Updating an item preserves its command list.
 
@@ -105,7 +136,7 @@ action if its setup message is deleted or its saved prefix is no longer valid.
 Normal channel checks still apply. Unlinked Twitch accounts receive their item,
 but Discord command actions are skipped. No actions are deferred until linking.
 
-The final Discord reward embed reports command completion, failure, or skipping;
+Discord posts command completion, failure, or skipping after the reveal;
 the Twitch API returns `command_results` on the original attempt. Command errors
 are logged without undoing the saved item or cooldown. A command that responds
 with its own error message without signalling a framework failure may still report
@@ -233,7 +264,7 @@ Twitch chat supports the configured command followed by a crate name. With one
 configured crate, omitting the name opens it automatically. Duplicate receipts
 return the original result regardless of a later crate argument.
 
-All pulls use the server's existing enabled setting, catalog, and cooldown duration.
+All normal pulls use the server's enabled setting, catalog, and cooldown mode.
 Linked accounts share a cooldown by default; `sharedcooldown false` separates Discord
 and Twitch timers. A channel-point payment does not bypass the Twitch timer.
 Both platform timestamps are tracked even while sharing is enabled, so changing the
@@ -255,7 +286,7 @@ against a given Red instance's data; these locks do not coordinate multiple proc
 
 The optional `Store` cog uses Red's existing bank balance for guaranteed items and
 extra random crate openings. Store has its own `[p]store` / `[p]storeset` commands
-and catalog, described in `store/README.md`. No listings are installed by default.
+and catalog, described in the [Store README](../store/README.md). No listings are installed by default.
 
 Trusted API: `await cog.deliver_store_purchase(guild_id, discord_id, purchase_id,
 kind, tier=None, name=None, quantity=1)`. `kind` is `item` or `crate`; crate quantity
