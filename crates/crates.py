@@ -687,7 +687,6 @@ class Crates(commands.Cog):
                     "items": sum(owned.values()),
                     "value": sum(catalog[name]["value"] * qty for name, qty in owned.items()),
                     "pulls": data.get("crate_stats", {}).get(tier, {}).get("pulls", 0),
-                    "lifetime_pulls": data["pulls"],
                 }))
             return sorted(collectors, key=lambda row: (-row[1]["value"], -row[1]["pulls"], row[0]))
 
@@ -716,10 +715,9 @@ class Crates(commands.Cog):
             name = discord.utils.escape_markdown(current[uid].display_name)
             lines.append(
                 f"{badge} **{name}**\n"
-                f"{data['items']:,} items · {data['value']:,} inventory value · "
-                f"{data['pulls']:,} recorded crate pulls · {data['lifetime_pulls']:,} lifetime pulls"
+                f"{data['items']:,} items · {data['value']:,} inventory value"
             )
-        summary = f"**{len(rows):,}** collectors | Ranked by inventory value, then recorded crate pulls"
+        summary = f"**{len(rows):,}** collectors | Ranked by inventory value"
         await self.send_collection(ctx, title, lines or ["No matching items in member inventories yet."], summary)
 
 
