@@ -161,6 +161,9 @@ class Launch(discord.ui.View):
                 return
             await interaction.response.defer(ephemeral=True)
             async with cog.lock(guild_id, interaction.user.id):
+                if form_id not in await cog.config.guild(interaction.guild).forms():
+                    await interaction.followup.send("This form is unavailable.", ephemeral=True)
+                    return
                 group = cog.config.member_from_ids(guild_id, interaction.user.id)
                 draft = await group.draft()
                 different = draft and draft["form_id"] != form_id
@@ -294,6 +297,8 @@ class Forms(commands.Cog):
     async def cog_load(self):
         for guild_id, data in (await self.config.all_guilds()).items():
             for message_id, binding in data["bindings"].items():
+                if binding["form_id"] not in data["forms"]:
+                    continue
                 view = Launch(self, guild_id, binding["form_id"], binding["label"])
                 self.bot.add_view(view, message_id=int(message_id))
                 self.views.append(view)
@@ -465,6 +470,82 @@ class Forms(commands.Cog):
         for line in lines:
             await ctx.send(line, allowed_mentions=discord.AllowedMentions.none())
 
+    @forms.command(name="delete")
+    async def delete(self, ctx, form_id: str):
+        """Delete a saved form and remove all its attached launch buttons."""
+        if ctx.guild.id in self.builders:
+            await ctx.send("Finish or cancel the open form builder before deleting a form.")
+            return
+        # Reserve the builder slot so an edit cannot restore the deleted form.
+        self.builders.add(ctx.guild.id)
+        try:
+            group = self.config.guild(ctx.guild)
+            bindings = await group.bindings()
+            linked = {key: value for key, value in bindings.items() if value["form_id"] == form_id}
+            async with group.forms() as forms:
+                if form_id not in forms and not linked:
+                    await ctx.send("Unknown form ID.")
+                    return
+                forms.pop(form_id, None)
+            removed, failed = [], []
+            expected_id = f"forms:{ctx.guild.id}:{form_id}"
+            for message_id, binding in linked.items():
+                channel_id = binding.get("channel_id")
+                # Older bindings did not store channel IDs. Search accessible channels
+                # once, retaining unresolved bindings so cleanup can be retried.
+                if channel_id:
+                    channels = [ctx.guild.get_channel_or_thread(channel_id)]
+                else:
+                    channels = list(ctx.guild.text_channels) + list(ctx.guild.threads)
+                found = False
+                inaccessible = False
+                for channel in channels:
+                    if channel is None:
+                        continue
+                    try:
+                        message = await channel.fetch_message(int(message_id))
+                    except discord.NotFound:
+                        continue
+                    except discord.HTTPException:
+                        inaccessible = True
+                        continue
+                    found = True
+                    if message.author.id != self.bot.user.id:
+                        failed.append(message_id)
+                        break
+                    try:
+                        view = discord.ui.View.from_message(message, timeout=None)
+                        for item in list(view.children):
+                            if getattr(item, "custom_id", None) == expected_id:
+                                view.remove_item(item)
+                        await message.edit(view=view if view.children else None)
+                    except (discord.HTTPException, ValueError):
+                        failed.append(message_id)
+                    else:
+                        removed.append(message_id)
+                    break
+                if not found:
+                    if inaccessible:
+                        failed.append(message_id)
+                    else:
+                        # Already deleted messages/channels require no cleanup.
+                        removed.append(message_id)
+            async with group.bindings() as saved:
+                for message_id in removed:
+                    saved.pop(message_id, None)
+            for view in self.views[:]:
+                if isinstance(view, Launch) and any(
+                    getattr(item, "custom_id", None) == expected_id for item in view.children
+                ):
+                    view.stop()
+                    self.views.remove(view)
+            text = f"Deleted form `{form_id}`. Cleaned up {len(removed)} linked button(s). Existing member drafts remain available in DMs."
+            if failed:
+                text += f" Could not remove {len(failed)} button(s). Restore channel access and run this command again to retry."
+            await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
+        finally:
+            self.builders.discard(ctx.guild.id)
+
     @forms.command(name="attach")
     async def attach(self, ctx, form_id: str, message: discord.Message, *, label: str = "Open form"):
         """Attach a form: forms attach <id> <message link> [button label]."""
@@ -482,7 +563,7 @@ class Forms(commands.Cog):
             return
         view = Launch(self, ctx.guild.id, form_id, label)
         async with self.config.guild(ctx.guild).bindings() as bindings:
-            bindings[str(message.id)] = dict(form_id=form_id, label=label)
+            bindings[str(message.id)] = dict(form_id=form_id, label=label, channel_id=message.channel.id)
         try:
             await message.edit(view=view)
         except discord.HTTPException:
