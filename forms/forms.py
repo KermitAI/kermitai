@@ -196,6 +196,89 @@ class Launch(discord.ui.View):
         self.add_item(button)
 
 
+class BuilderInputModal(discord.ui.Modal):
+    def __init__(self, view, prompt):
+        super().__init__(title="Form builder", timeout=300)
+        self.source = view
+        self.add_item(discord.ui.TextInput(label=prompt[:45], style=discord.TextStyle.short,
+                                          required=True, max_length=200))
+
+    async def on_submit(self, interaction):
+        view = self.source
+        if interaction.user.id != view.user_id or view.is_finished():
+            await interaction.response.send_message("This builder step has ended.", ephemeral=True)
+            return
+        value = self.children[0].value.strip()
+        if not value:
+            await interaction.response.send_message("Please enter a value and try again.", ephemeral=True)
+            return
+        view.value = value
+        for item in view.children:
+            item.disabled = True
+        try:
+            await interaction.response.edit_message(view=view)
+        finally:
+            view.stop()
+
+
+class BuilderInput(discord.ui.View):
+    def __init__(self, user_id, prompt):
+        super().__init__(timeout=300)
+        self.user_id, self.prompt = user_id, prompt
+        self.value = None
+        self.cancelled = False
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Only the administrator building this form can answer.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Enter answer", style=discord.ButtonStyle.primary)
+    async def enter(self, interaction, button):
+        await interaction.response.send_modal(BuilderInputModal(self, self.prompt))
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction, button):
+        self.cancelled = True
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        finally:
+            self.stop()
+
+
+class BuilderChoice(discord.ui.View):
+    """One-shot choices restricted to the administrator running the builder."""
+    def __init__(self, user_id, choices):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.value = None
+        for label, value in choices:
+            style = discord.ButtonStyle.danger if value == "cancel" else discord.ButtonStyle.primary
+            button = discord.ui.Button(label=label, style=style)
+            async def callback(interaction, value=value):
+                if self.value is not None:
+                    await interaction.response.defer()
+                    return
+                self.value = value
+                for item in self.children:
+                    item.disabled = True
+                try:
+                    await interaction.response.edit_message(view=self)
+                finally:
+                    self.stop()
+            button.callback = callback
+            self.add_item(button)
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Only the administrator building this form can choose these options.", ephemeral=True)
+            return False
+        return True
+
+
 class Forms(commands.Cog):
     """Build reusable forms and attach them to bot messages."""
     def __init__(self, bot):
@@ -254,13 +337,46 @@ class Forms(commands.Cog):
         """Create, list, resume building, and attach forms."""
 
     async def ask(self, ctx, prompt):
-        await ctx.send(prompt + "\nType `cancel` to cancel. Replies time out after 5 minutes.")
-        message = await self.bot.wait_for("message", timeout=300,
-            check=lambda m: m.author.id == ctx.author.id and m.channel.id == ctx.channel.id)
-        value = message.content.strip()
-        if value.lower() == "cancel":
+        view = BuilderInput(ctx.author.id, prompt)
+        embed = discord.Embed(title="Form builder", description=prompt, colour=discord.Colour.green())
+        embed.set_footer(text="Click Enter answer to open a modal. Times out after 5 minutes.")
+        message = await ctx.send(embed=embed, view=view)
+        try:
+            await view.wait()
+        finally:
+            for item in view.children:
+                item.disabled = True
+            view.stop()
+            try:
+                await message.edit(view=view)
+            except discord.HTTPException:
+                pass
+        if view.cancelled:
             raise asyncio.CancelledError
-        return value
+        if view.value is None:
+            raise asyncio.TimeoutError
+        return view.value
+
+    async def choose(self, ctx, title, description, choices):
+        view = BuilderChoice(ctx.author.id, choices)
+        embed = discord.Embed(title=title, description=description, colour=discord.Colour.green())
+        embed.set_footer(text="Choose a button below. Times out after 5 minutes.")
+        message = await ctx.send(embed=embed, view=view)
+        try:
+            await view.wait()
+        finally:
+            for item in view.children:
+                item.disabled = True
+            view.stop()
+            try:
+                await message.edit(view=view)
+            except discord.HTTPException:
+                pass
+        if view.value is None:
+            raise asyncio.TimeoutError
+        if view.value == "cancel":
+            raise asyncio.CancelledError
+        return view.value
 
     @forms.command(name="create")
     async def create(self, ctx):
@@ -295,7 +411,7 @@ class Forms(commands.Cog):
                 if not re.fullmatch(r"[a-z0-9_-]{1,40}", form_id) or form_id in existing:
                     await ctx.send("Invalid or already used form ID.")
                     return
-                channel_text = await self.ask(ctx, "Which text channel should receive responses? Mention it or enter its ID.")
+                channel_text = await self.ask(ctx, "Which text channel should receive responses? Enter its channel ID, #channel-name, or channel mention.")
                 channel = await commands.TextChannelConverter().convert(ctx, channel_text)
                 permissions = channel.permissions_for(ctx.guild.me)
                 if not all((permissions.view_channel, permissions.send_messages, permissions.attach_files)):
@@ -307,13 +423,17 @@ class Forms(commands.Cog):
                 if not 1 <= len(question) <= 45:
                     await ctx.send("Questions must be 1–45 characters. Try again.")
                     continue
-                kind = (await self.ask(ctx, "Answer type: short, paragraph, number, or yesno?")).lower()
-                if kind not in ("short", "paragraph", "number", "yesno"):
-                    await ctx.send("Unknown type. Please enter the question again.")
-                    continue
+                kind = await self.choose(ctx, "Choose the answer type", question, (
+                    ("Short text", "short"), ("Paragraph", "paragraph"),
+                    ("Number", "number"), ("Yes / No", "yesno"), ("Cancel", "cancel")))
                 form["questions"].append(dict(text=question, type=kind))
                 while True:
-                    action = (await self.ask(ctx, "Choose: `save`, `save and exit`, `cancel`, or `add another question`.")).lower()
+                    action = await self.choose(ctx, "Question added — next step",
+                        f"Form: {form['name']} ({form_id})\nQuestions: {len(form['questions'])}\n\n"
+                        f"Latest question: {question}\nAnswer type: {kind}\n\n"
+                        "Save checkpoints your form and keeps the builder open. Cancel discards changes since your last save.",
+                        (("Save", "save"), ("Save and exit", "save and exit"),
+                         ("Add another question", "add"), ("Cancel", "cancel")))
                     if action in ("save", "save and exit"):
                         async with group.forms() as saved:
                             if form_id in saved and not existing.get(form_id):

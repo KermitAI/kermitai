@@ -4,12 +4,12 @@ Load with `[p]load forms` after installing the cog.
 
 ## Administrator commands
 
-- `[p]forms create`: asks for the display name, unique form ID, response channel, first question, and answer type. After each question choose `save`, `save and exit`, `cancel`, or `add another question`. `save` checkpoints the form and keeps the action prompt open. Cancellation or a five-minute reply timeout discards only unsaved changes.
+- `[p]forms create`: shows embed prompts for the display name (for example, Mod App), unique form ID, response channel, and question text. Click **Enter answer** on each embed and enter the value in its modal; no channel replies are needed. Choose the answer type with **Short text**, **Paragraph**, **Number**, or **Yes / No** buttons. After each question use **Save**, **Save and exit**, **Cancel**, or **Add another question**. **Save** checkpoints the form and keeps the action buttons open. Only the administrator running the builder can use its buttons; used or expired buttons are disabled. Cancellation or a five-minute step timeout discards only unsaved changes.
 - `[p]forms edit <form_id>`: resume adding questions to a saved form.
 - `[p]forms list`: list saved forms and IDs.
 - `[p]forms attach <form_id> <message_link> [button label]`: add a persistent button to an existing message authored by this bot in the same server. Messages with existing components are declined to preserve their controls.
 
-These commands require Manage Server or the configured Red administrator role. Only one builder runs per server at a time. Setup requires the message content intent, like other conversational prefix commands.
+These commands require Manage Server or the configured Red administrator role. Only one builder runs per server at a time. The builder uses buttons and modals after the initial command. Prefix commands still require the usual Red command setup.
 
 ## Member experience
 

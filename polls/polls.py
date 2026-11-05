@@ -373,6 +373,9 @@ class Polls(commands.Cog):
         await self.config.guild_from_id(gid).completed.set_raw(pid, value=record)
         await self.config.guild_from_id(gid).polls.clear_raw(pid)
         self.dirty.discard((gid, pid))
+        view = self.views.pop((gid, pid), None)
+        if view:
+            view.stop()
 
     async def delete_poll(self, gid, pid, poll):
         """Delete messages before clearing state; missing messages count as removed."""
@@ -445,7 +448,7 @@ class Polls(commands.Cog):
             for pid in data["polls"]:
                 async with self.lock(gid, pid):
                     poll = await self.config.guild_from_id(gid).polls.get_raw(pid, default=None)
-                    if poll and str(user_id) in poll["votes"]:
+                    if poll and str(user_id) in poll.get("votes", {}):
                         poll["votes"].pop(str(user_id))
                         await self.save(gid, pid, poll)
                         self.dirty.add((gid, pid))
