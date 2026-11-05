@@ -1,0 +1,10 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "Schedular",
+  "short": "Recurring announcements with an interactive setup panel.",
+  "description": "Schedule messages at intervals of at least 15 minutes or daily local times. Configure messages, channels, timezone, pause and deletion through embeds and buttons.",
+  "min_bot_version": "3.5.0",
+  "requirements": ["tzdata"],
+  "tags": ["announcements", "schedule", "utility"],
+  "end_user_data_statement": "Stores server announcement messages, channel IDs and schedules. No member-specific data is stored."
+}
