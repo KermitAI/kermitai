@@ -161,13 +161,15 @@ class DeletePicker(discord.ui.View):
             colour=discord.Colour.green())
         for index, (aid, record) in enumerate(self.visible()):
             letter = chr(0x1F1E6 + index)
+            title = discord.utils.escape_markdown(" ".join(record["message"].split()[:10]))
+            if len(title) > 150:
+                title = title[:147] + "..."
             if aid in self.deleted:
                 value = "Deleted."
             else:
                 timing = record["interval_label"] if record["mode"] == "interval" else ", ".join(record["times"]) + " (" + record["timezone"] + ")"
-                preview = discord.utils.escape_markdown(" ".join(record["message"].split()))[:150]
-                value = f"<#{record['channel']}> • {'Paused' if record['paused'] else 'Enabled'}\n{timing[:120]}\n{preview}"
-            embed.add_field(name=f"{letter} — {aid}", value=value, inline=False)
+                value = f"<#{record['channel']}> • {'Paused' if record['paused'] else 'Enabled'}\n{timing[:80]}"
+            embed.add_field(name=f"{letter} — {title}", value=value, inline=False)
         pages = (len(self.entries) + self.PAGE_SIZE - 1) // self.PAGE_SIZE
         embed.set_footer(text=f"Page {self.page + 1}/{pages} • Only the panel owner can delete • Expires after 15 minutes")
         return embed
