@@ -252,6 +252,27 @@ class BuilderInput(discord.ui.View):
             self.stop()
 
 
+class BuilderChannel(BuilderInput):
+    def __init__(self, user_id):
+        super().__init__(user_id, "Response channel")
+        self.remove_item(self.enter)
+        select = discord.ui.ChannelSelect(placeholder="Choose the response channel",
+            channel_types=[discord.ChannelType.text], min_values=1, max_values=1)
+        async def callback(interaction):
+            if self.is_finished():
+                await interaction.response.send_message("This step has ended.", ephemeral=True)
+                return
+            self.value = str(select.values[0].id)
+            for item in self.children:
+                item.disabled = True
+            try:
+                await interaction.response.edit_message(view=self)
+            finally:
+                self.stop()
+        select.callback = callback
+        self.add_item(select)
+
+
 class BuilderChoice(discord.ui.View):
     """One-shot choices restricted to the administrator running the builder."""
     def __init__(self, user_id, choices):
@@ -290,6 +311,7 @@ class Forms(commands.Cog):
         self.config.register_guild(forms={}, bindings={})
         self.config.register_member(draft=None)
         self.locks, self.views, self.builders = {}, [], set()
+        self.builder_messages = {}
 
     def lock(self, guild_id, user_id):
         return self.locks.setdefault((guild_id, user_id), asyncio.Lock())
@@ -341,11 +363,22 @@ class Forms(commands.Cog):
     async def forms(self, ctx):
         """Create, list, resume building, and attach forms."""
 
-    async def ask(self, ctx, prompt):
-        view = BuilderInput(ctx.author.id, prompt)
+    async def builder_message(self, ctx, *, embed=None, view=None, text=None):
+        if text is not None:
+            embed = discord.Embed(title="Form builder", description=text, colour=discord.Colour.green())
+        message = self.builder_messages.get(ctx.guild.id)
+        if message is None:
+            message = await ctx.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+            self.builder_messages[ctx.guild.id] = message
+        else:
+            await message.edit(content=None, embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+        return message
+
+    async def ask(self, ctx, prompt, *, channel=False):
+        view = BuilderChannel(ctx.author.id) if channel else BuilderInput(ctx.author.id, prompt)
         embed = discord.Embed(title="Form builder", description=prompt, colour=discord.Colour.green())
-        embed.set_footer(text="Click Enter answer to open a modal. Times out after 5 minutes.")
-        message = await ctx.send(embed=embed, view=view)
+        embed.set_footer(text="Choose a channel below. Times out after 5 minutes." if channel else "Click Enter answer to open a modal. Times out after 5 minutes.")
+        message = await self.builder_message(ctx, embed=embed, view=view)
         try:
             await view.wait()
         finally:
@@ -366,7 +399,7 @@ class Forms(commands.Cog):
         view = BuilderChoice(ctx.author.id, choices)
         embed = discord.Embed(title=title, description=description, colour=discord.Colour.green())
         embed.set_footer(text="Choose a button below. Times out after 5 minutes.")
-        message = await ctx.send(embed=embed, view=view)
+        message = await self.builder_message(ctx, embed=embed, view=view)
         try:
             await view.wait()
         finally:
@@ -404,29 +437,29 @@ class Forms(commands.Cog):
             existing = await group.forms()
             if form_id:
                 if form_id not in existing:
-                    await ctx.send("Unknown form ID.")
+                    await self.builder_message(ctx, text="Unknown form ID.")
                     return
                 form = copy.deepcopy(existing[form_id])
             else:
                 name = await self.ask(ctx, "What is the form name? (1–45 characters)")
                 if not 1 <= len(name) <= 45:
-                    await ctx.send("The name must be 1–45 characters.")
+                    await self.builder_message(ctx, text="The name must be 1–45 characters.")
                     return
                 form_id = await self.ask(ctx, "What is its unique ID? Use 1–40 lowercase letters, numbers, hyphens or underscores.")
                 if not re.fullmatch(r"[a-z0-9_-]{1,40}", form_id) or form_id in existing:
-                    await ctx.send("Invalid or already used form ID.")
+                    await self.builder_message(ctx, text="Invalid or already used form ID.")
                     return
-                channel_text = await self.ask(ctx, "Which text channel should receive responses? Enter its channel ID, #channel-name, or channel mention.")
+                channel_text = await self.ask(ctx, "Which text channel should receive responses?", channel=True)
                 channel = await commands.TextChannelConverter().convert(ctx, channel_text)
                 permissions = channel.permissions_for(ctx.guild.me)
                 if not all((permissions.view_channel, permissions.send_messages, permissions.attach_files)):
-                    await ctx.send("I need View Channel, Send Messages, and Attach Files there.")
+                    await self.builder_message(ctx, text="I need View Channel, Send Messages, and Attach Files there.")
                     return
                 form = dict(name=name, channel=channel.id, questions=[])
             while True:
                 question = await self.ask(ctx, "Enter the next question (1–45 characters).")
                 if not 1 <= len(question) <= 45:
-                    await ctx.send("Questions must be 1–45 characters. Try again.")
+                    await self.builder_message(ctx, text="Questions must be 1–45 characters. Try again.")
                     continue
                 kind = await self.choose(ctx, "Choose the answer type", question, (
                     ("Short text", "short"), ("Paragraph", "paragraph"),
@@ -442,23 +475,24 @@ class Forms(commands.Cog):
                     if action in ("save", "save and exit"):
                         async with group.forms() as saved:
                             if form_id in saved and not existing.get(form_id):
-                                await ctx.send("That ID was saved by another builder. Cancelled.")
+                                await self.builder_message(ctx, text="That ID was saved by another builder. Cancelled.")
                                 return
                             saved[form_id] = copy.deepcopy(form)
                         existing[form_id] = copy.deepcopy(form)
-                        await ctx.send(f"Saved `{form_id}` with {len(form['questions'])} questions.")
+                        await self.builder_message(ctx, text=f"Saved `{form_id}` with {len(form['questions'])} questions.")
                         if action == "save and exit":
                             return
                     elif action in ("add", "add another question"):
                         break
                     else:
-                        await ctx.send("Choose one of the listed actions.")
+                        await self.builder_message(ctx, text="Choose one of the listed actions.")
         except (asyncio.TimeoutError, asyncio.CancelledError):
-            await ctx.send("Builder ended. Any previously saved version is retained.")
+            await self.builder_message(ctx, text="Builder ended. Any previously saved version is retained.")
         except commands.BadArgument:
-            await ctx.send("That channel could not be found. Builder ended.")
+            await self.builder_message(ctx, text="That channel could not be found. Builder ended.")
         finally:
             self.builders.discard(key)
+            self.builder_messages.pop(key, None)
 
     @forms.command(name="list")
     async def list_forms(self, ctx):
