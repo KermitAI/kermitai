@@ -22,6 +22,17 @@ def duration(value):
     return result
 
 
+def poll_reference(value, guild_id):
+    """Return a message ID, rejecting links to another server."""
+    value = value.strip().strip("<>")
+    if re.fullmatch(r"[0-9]+", value) and int(value) > 0:
+        return str(int(value))
+    match = re.fullmatch(r"https://(?:(?:canary|ptb)\.)?discord(?:app)?\.com/channels/([0-9]+)/([0-9]+)/([0-9]+)/?", value)
+    if not match or int(match[1]) != guild_id:
+        raise ValueError("Provide a poll message ID or a Discord message link from this server.")
+    return str(int(match[3]))
+
+
 def letter(index):
     return chr(0x1F1E6 + index)
 
@@ -200,7 +211,7 @@ class Polls(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=827419620504, force_registration=True)
-        self.config.register_guild(polls={})
+        self.config.register_guild(polls={}, completed={})
         self.locks, self.views, self.builders = {}, {}, set()
         self.worker = None
         self.dirty = set()
@@ -211,7 +222,7 @@ class Polls(commands.Cog):
     async def cog_load(self):
         for gid, data in (await self.config.all_guilds()).items():
             for pid, poll in data["polls"].items():
-                if not poll.get("closed"):
+                if not poll.get("closed") and not poll.get("deleting"):
                     view = Ballot(self, gid, pid, poll)
                     self.bot.add_view(view, message_id=int(pid))
                     self.views[gid, pid] = view
@@ -269,7 +280,7 @@ class Polls(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         async with self.lock(gid, pid):
             poll = await self.config.guild_from_id(gid).polls.get_raw(pid, default=None)
-            if not poll or poll.get("closed") or time.time() >= poll["ends"]:
+            if not poll or poll.get("closed") or poll.get("deleting") or time.time() >= poll["ends"]:
                 await interaction.followup.send("This poll has ended.", ephemeral=True)
                 return
             if not interaction.guild or interaction.guild.id != gid or interaction.user.bot:
@@ -329,23 +340,10 @@ class Polls(commands.Cog):
                             if not poll:
                                 continue
                             try:
-                                if time.time() >= poll["ends"]:
-                                    poll["closed"] = True
-                                    await self.save(gid, pid, poll)
-                                    if not poll.get("finalized"):
-                                        try:
-                                            await self.refresh(gid, pid, poll)
-                                        except discord.NotFound:
-                                            pass
-                                        poll["finalized"] = True
-                                        await self.save(gid, pid, poll)
-                                    if not poll.get("delivered"):
-                                        channel = self.bot.get_partial_messageable(poll["results"])
-                                        await channel.send(embed=poll_embed(poll), allowed_mentions=discord.AllowedMentions.none())
-                                        poll["delivered"] = True
-                                        # Successful delivery no longer needs member voting records.
-                                        await self.config.guild_from_id(gid).polls.clear_raw(pid)
-                                        self.locks.pop((gid, pid), None)
+                                if poll.get("deleting"):
+                                    await self.delete_poll(gid, pid, poll)
+                                elif poll.get("closed") or time.time() >= poll["ends"]:
+                                    await self.finish_poll(gid, pid, poll)
                                 elif (gid, pid) in self.dirty:
                                     await self.refresh(gid, pid, poll)
                             except discord.HTTPException:
@@ -353,6 +351,94 @@ class Polls(commands.Cog):
             except Exception:
                 log.exception("Poll timer failed; retrying")
             await asyncio.sleep(5)
+
+    async def finish_poll(self, gid, pid, poll):
+        """Finalize under the poll lock; saved stages make retries safe."""
+        poll["closed"] = True
+        await self.save(gid, pid, poll)
+        if not poll.get("finalized"):
+            try:
+                await self.refresh(gid, pid, poll)
+            except discord.NotFound:
+                pass
+            poll["finalized"] = True
+            await self.save(gid, pid, poll)
+        if not poll.get("result_message"):
+            channel = self.bot.get_partial_messageable(poll["results"])
+            message = await channel.send(embed=poll_embed(poll), allowed_mentions=discord.AllowedMentions.none())
+            poll["result_message"] = message.id
+            await self.save(gid, pid, poll)
+        # Keep only message locations so completed polls can also be deleted.
+        record = {key: poll[key] for key in ("channel", "results", "result_message")}
+        await self.config.guild_from_id(gid).completed.set_raw(pid, value=record)
+        await self.config.guild_from_id(gid).polls.clear_raw(pid)
+        self.dirty.discard((gid, pid))
+
+    async def delete_poll(self, gid, pid, poll):
+        """Delete messages before clearing state; missing messages count as removed."""
+        for cid, mid in ((poll["channel"], int(pid)), (poll["results"], poll.get("result_message"))):
+            if not mid:
+                continue
+            message = self.bot.get_partial_messageable(cid).get_partial_message(mid)
+            try:
+                await message.delete()
+            except discord.NotFound:
+                pass
+        group = self.config.guild_from_id(gid)
+        await group.polls.clear_raw(pid)
+        await group.completed.clear_raw(pid)
+        view = self.views.pop((gid, pid), None)
+        if view:
+            view.stop()
+        self.dirty.discard((gid, pid))
+
+    async def manage_poll(self, ctx, reference, *, delete=False):
+        try:
+            pid = poll_reference(reference, ctx.guild.id)
+        except ValueError as error:
+            await ctx.send(str(error))
+            return
+        gid = ctx.guild.id
+        async with self.lock(gid, pid):
+            group = self.config.guild_from_id(gid)
+            poll = await group.polls.get_raw(pid, default=None)
+            if not poll and delete:
+                poll = await group.completed.get_raw(pid, default=None)
+            if not poll:
+                await ctx.send("No saved poll found with that ID in this server. It may already have ended or been deleted.")
+                return
+            if not delete and poll.get("deleting"):
+                await ctx.send("This poll is being deleted.")
+                return
+            if delete:
+                # Persist cancellation first so a failed deletion never publishes results.
+                poll["deleting"] = True
+                await self.save(gid, pid, poll)
+            try:
+                if delete:
+                    await self.delete_poll(gid, pid, poll)
+                else:
+                    await self.finish_poll(gid, pid, poll)
+            except discord.HTTPException:
+                await ctx.send("Voting has stopped. I couldn't finish deleting the poll; I'll retry automatically. Check my channel access."
+                    if delete else "Voting has stopped. I couldn't finish updating the poll or posting results; I'll retry automatically. Check my channel access.")
+                return
+            await ctx.send("Poll and saved voting data deleted, including its results copy if present."
+                if delete else "Poll closed and final results posted.")
+
+    @commands.command()
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_guild=True)
+    async def pollclose(self, ctx, *, poll: str):
+        """Close a poll immediately and post results. Supply its message ID or link."""
+        await self.manage_poll(ctx, poll)
+
+    @commands.command()
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_guild=True)
+    async def polldelete(self, ctx, *, poll: str):
+        """Delete a poll and its results copy without publishing new results."""
+        await self.manage_poll(ctx, poll, delete=True)
 
     async def red_delete_data_for_user(self, *, requester, user_id):
         for gid, data in (await self.config.all_guilds()).items():
@@ -375,7 +461,3 @@ class Polls(commands.Cog):
         self.builders.add(builder)
         builder.message = await ctx.send(embed=poll_embed(builder.poll, preview=True), view=builder,
                                          allowed_mentions=discord.AllowedMentions.none())
-
-
-
-

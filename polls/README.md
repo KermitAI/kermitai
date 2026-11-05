@@ -12,3 +12,10 @@ Load with `[p]load polls`, then run `[p]pollcreate` (administrator or Manage Ser
 - Member IDs and votes are removed after successful results delivery. Data deletion requests remove that member's active votes. Discord messages containing published aggregate results remain.
 
 Checks: `python -m unittest discover -s polls/tests -v`. These exercise duration parsing, totals/results, voting toggles, roles, deadlines and concurrent vote limits without a running bot. Live Discord testing is still required for UI and permissions.
+
+## Close or delete a poll
+
+- `[p]pollclose <message ID or message link>` ends voting immediately, removes voting buttons, and posts the final results in the configured channel.
+- `[p]polldelete <message ID or message link>` removes the poll message, saved votes, and any tracked results copy. It does not post new results.
+
+Both require administrator or Manage Server permission and work only on polls from the current server. Failed updates/deletions retry automatically; voting stays stopped. Completed polls finalized after this update retain only their message locations so they can be deleted too. Polls already completed before this update are no longer tracked and must be deleted manually in Discord.
