@@ -79,6 +79,19 @@ Persistent member data includes inventory, pull count, collected value, and last
 
 The leaderboard uses Discord's cached server member list; enable the bot's Server Members intent for complete membership information.
 
+## Transfer crates between servers
+
+1. Run `[p]crateset export` in the source server and download the attached `crates.json`.
+2. In the destination server, attach the file to the message `[p]crateset import`.
+
+Both commands require Red admin access or Manage Server. The file contains all
+crate and item definitions, including weights, values, emojis, image URLs, and
+empty rewards. Custom emoji references require the bot to have access to those
+emojis. Reward commands are configured separately in the destination server.
+Inventories, pull history, cooldowns, role luck, and channel settings stay with
+their original server. Imports skip existing crate names and validate the entire
+file before saving. The destination can hold up to 50 crates.
+
 ## Cooldowns
 
 | Command | Effect |

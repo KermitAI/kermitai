@@ -1,4 +1,6 @@
 import asyncio
+import io
+import json
 import copy
 from datetime import datetime, time as wall_time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -761,6 +763,102 @@ class Crates(commands.Cog):
         if not tiers:
             lines.append("No tiers configured. Add a tier, then add its items.")
         await self.send_pages(ctx, "\n".join(lines))
+
+    @classmethod
+    def portable_catalog(cls, tiers):
+        """Validate catalog entries and copy only portable reward settings."""
+        if not isinstance(tiers, dict) or len(tiers) > 50:
+            raise ValueError("Expected a catalog with up to 50 crates.")
+
+        def appearance(entry):
+            if not isinstance(entry, dict):
+                raise ValueError("Invalid crate or item entry.")
+            weight = entry.get("weight")
+            if type(weight) not in (int, float) or not 0 < weight <= 1_000_000:
+                raise ValueError("Weights must be greater than zero and at most 1,000,000.")
+            result = {"weight": weight}
+            if "emoji" in entry:
+                emoji = entry["emoji"]
+                if not isinstance(emoji, str) or not cls.valid_emoji(emoji):
+                    raise ValueError("Invalid crate or item emoji.")
+                result["emoji"] = emoji
+            return result
+
+        catalog = {}
+        for tier, entry in tiers.items():
+            if not re.fullmatch(r"[a-z0-9-]{1,32}", tier):
+                raise ValueError("Invalid crate name.")
+            crate = appearance(entry)
+            items = entry.get("items")
+            if not isinstance(items, dict) or len(items) > 100:
+                raise ValueError("Each crate must have an item catalog with up to 100 items.")
+            crate["items"] = {}
+            for name, item in items.items():
+                if not 1 <= len(name) <= 100 or name != name.strip() or any(ord(c) < 32 for c in name):
+                    raise ValueError("Invalid item name.")
+                reward = appearance(item)
+                value = item.get("value")
+                empty = item.get("empty", False)
+                if type(value) is not int or not 0 <= value <= 1_000_000_000 or type(empty) is not bool:
+                    raise ValueError("Invalid item value or empty reward flag.")
+                image = item.get("image")
+                if image is not None:
+                    if not isinstance(image, str) or len(image) > 2000:
+                        raise ValueError("Invalid item image URL.")
+                    parsed = urlsplit(image)
+                    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                        raise ValueError("Use HTTP(S) item image URLs.")
+                reward.update(value=value, empty=empty, image=image)
+                crate["items"][name] = reward
+            catalog[tier] = crate
+        return catalog
+
+    @crateset.command(name="export")
+    async def export_catalog(self, ctx):
+        """Export all configured crates and items as a portable JSON attachment."""
+        tiers = await self.config.guild(ctx.guild).tiers()
+        try:
+            catalog = self.portable_catalog(tiers)
+        except ValueError as exc:
+            await ctx.send(f"Cannot export crate catalog: {exc}")
+            return
+        payload = json.dumps({"version": 1, "tiers": catalog}, ensure_ascii=True, separators=(",", ":"))
+        await ctx.send(file=discord.File(io.BytesIO(payload.encode("utf-8")), filename="crates.json"))
+
+    @crateset.command(name="import")
+    async def import_catalog(self, ctx):
+        """Import a crates.json attachment, skipping existing crate names."""
+        attachments = ctx.message.attachments
+        if len(attachments) != 1 or not attachments[0].filename.lower().endswith(".json"):
+            await ctx.send("Attach one JSON file to the crateset import message.")
+            return
+        attachment = attachments[0]
+        if attachment.size > 128 * 1024 * 1024:
+            await ctx.send("The crate catalog file is too large.")
+            return
+        try:
+            payload = json.loads(await attachment.read())
+            if not isinstance(payload, dict) or type(payload.get("version")) is not int or payload["version"] != 1:
+                raise ValueError("Unsupported crate export format.")
+            catalog = self.portable_catalog(payload.get("tiers"))
+        except discord.HTTPException:
+            await ctx.send("Could not download the attachment. Please attach it again.")
+            return
+        except (ValueError, RecursionError):
+            await ctx.send("Invalid crate catalog. Use a JSON file produced by crateset export.")
+            return
+
+        async with self.lock(ctx.guild.id):
+            group = self.config.guild(ctx.guild)
+            tiers = await group.tiers()
+            additions = {name: entry for name, entry in catalog.items() if name not in tiers}
+            over_limit = len(tiers) + len(additions) > 50
+            if additions and not over_limit:
+                await group.tiers.set({**tiers, **additions})
+        if over_limit:
+            await ctx.send("Import would exceed the 50-crate limit. No crates were imported.")
+            return
+        await ctx.send(f"Imported {len(additions)} crate(s). Skipped {len(catalog) - len(additions)} existing name(s).")
 
     @crateset.command(name="tier")
     async def set_tier(self, ctx, tier: str, weight: float, emoji: Optional[str] = None):

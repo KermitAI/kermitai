@@ -1,0 +1,10 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "Polls",
+  "short": "Build timed polls with live button voting and team restrictions.",
+  "description": "Interactive poll previews, role restrictions, configurable vote limits, persistent voting and automatic results delivery.",
+  "min_bot_version": "3.5.0",
+  "requirements": [],
+  "tags": ["polls", "utility"],
+  "end_user_data_statement": "Stores member IDs and selected options until results delivery or data deletion. Published results remain in Discord."
+}

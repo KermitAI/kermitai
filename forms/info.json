@@ -1,0 +1,10 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "Forms",
+  "short": "Create reusable forms with persistent launch buttons and saved drafts.",
+  "description": "Guided form creation, typed answers, private DM questionnaires, saved member drafts and channel delivery.",
+  "min_bot_version": "3.5.0",
+  "requirements": [],
+  "tags": ["forms", "utility"],
+  "end_user_data_statement": "Stores member IDs and form drafts until submission, cancellation, or data deletion. Submitted answers remain in the destination channel."
+}
