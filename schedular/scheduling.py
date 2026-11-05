@@ -5,10 +5,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def interval(value):
-    match = re.fullmatch(r"\s*(\d+)\s*(minutes?|hours?|days?|weeks?)\s*", value.lower())
+    match = re.fullmatch(r"\s*(\d+)\s*(minutes?|hours?|days?|weeks?|[mhdw])\s*", value.lower())
     if not match:
-        raise ValueError("Use whole minutes, hours, days or weeks, e.g. 15 minutes or 2 hours.")
-    seconds = int(match[1]) * {"minute": 60, "hour": 3600, "day": 86400, "week": 604800}[match[2].rstrip("s")]
+        raise ValueError("Use whole minutes, hours, days or weeks, e.g. 15m, 2h, 3d, 1w or 15 minutes.")
+    seconds = int(match[1]) * {"minute": 60, "hour": 3600, "day": 86400, "week": 604800}[{"m": "minute", "h": "hour", "d": "day", "w": "week"}.get(match[2], match[2].rstrip("s"))]
     if seconds < 900:
         raise ValueError("The minimum interval is 15 minutes.")
     if seconds > 31536000:

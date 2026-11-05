@@ -31,7 +31,7 @@ class SettingModal(discord.ui.Modal):
         super().__init__(title=action, timeout=300)
         self.view, self.action = view, action
         key, label, limit = {"Message": ("message", "Announcement message", 2000),
-            "Interval": ("interval_label", "E.g. 15 minutes, 2 hours, 3 days, 1 week", 50),
+            "Interval": ("interval_label", "E.g. 15m, 2h, 3d, 1w or 15 minutes", 50),
             "Daily times": (None, "Daily times (24-hour, comma separated)", 600),
             "Timezone": ("timezone", "IANA timezone, e.g. America/Toronto", 100)}[action]
         default = view.record[key] if key else ", ".join(view.record["times"])
@@ -136,6 +136,94 @@ class AnnouncementPanel(discord.ui.View):
                 pass
 
 
+class DeletePicker(discord.ui.View):
+    """Keep letter-to-ID mappings fixed while a deletion panel is open."""
+    PAGE_SIZE = 20
+
+    def __init__(self, cog, ctx, records):
+        super().__init__(timeout=900)
+        self.cog, self.ctx = cog, ctx
+        self.entries = list(records.items())
+        self.page, self.deleted = 0, set()
+        self.lock, self.message = asyncio.Lock(), None
+        self.rebuild()
+
+    async def interaction_check(self, interaction):
+        return await AnnouncementPanel.interaction_check(self, interaction)
+
+    def visible(self):
+        start = self.page * self.PAGE_SIZE
+        return self.entries[start:start + self.PAGE_SIZE]
+
+    def embed(self):
+        embed = discord.Embed(title="Delete scheduled announcements",
+            description="Press the matching letter to delete a schedule immediately. Previously posted messages remain.",
+            colour=discord.Colour.green())
+        for index, (aid, record) in enumerate(self.visible()):
+            letter = chr(0x1F1E6 + index)
+            if aid in self.deleted:
+                value = "Deleted."
+            else:
+                timing = record["interval_label"] if record["mode"] == "interval" else ", ".join(record["times"]) + " (" + record["timezone"] + ")"
+                preview = discord.utils.escape_markdown(" ".join(record["message"].split()))[:150]
+                value = f"<#{record['channel']}> • {'Paused' if record['paused'] else 'Enabled'}\n{timing[:120]}\n{preview}"
+            embed.add_field(name=f"{letter} — {aid}", value=value, inline=False)
+        pages = (len(self.entries) + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+        embed.set_footer(text=f"Page {self.page + 1}/{pages} • Only the panel owner can delete • Expires after 15 minutes")
+        return embed
+
+    def rebuild(self):
+        self.clear_items()
+        for index, (aid, record) in enumerate(self.visible()):
+            button = discord.ui.Button(emoji=chr(0x1F1E6 + index),
+                style=discord.ButtonStyle.danger, disabled=aid in self.deleted)
+            async def callback(interaction, aid=aid, original=record):
+                async with self.lock:
+                    if self.is_finished():
+                        await interaction.response.send_message("This panel has ended.", ephemeral=True)
+                        return
+                    await interaction.response.defer()
+                    async with self.cog.lock(self.ctx.guild.id):
+                        group = self.cog.config.guild(self.ctx.guild).announcements
+                        current = await group.get_raw(aid, default=None)
+                        if current is not None and any(current.get(key) != original.get(key) for key in
+                                ("revision", "message", "channel", "mode", "interval", "times", "timezone", "paused")):
+                            await interaction.followup.send("This announcement changed. Run schedular delete again to review it.", ephemeral=True)
+                            return
+                        if current is not None:
+                            await group.clear_raw(aid)
+                    self.deleted.add(aid)
+                    self.rebuild()
+                    await interaction.edit_original_response(embed=self.embed(), view=self,
+                        allowed_mentions=discord.AllowedMentions.none())
+            button.callback = callback
+            self.add_item(button)
+        for label, delta in (("Previous", -1), ("Next", 1), ("Close", 0)):
+            button = discord.ui.Button(label=label, row=4,
+                disabled=(delta == -1 and self.page == 0) or (delta == 1 and (self.page + 1) * self.PAGE_SIZE >= len(self.entries)))
+            async def navigate(interaction, delta=delta):
+                async with self.lock:
+                    if self.is_finished():
+                        await interaction.response.send_message("This panel has ended.", ephemeral=True)
+                    elif delta == 0:
+                        self.stop()
+                        await interaction.response.edit_message(content="Deletion panel closed.", view=None)
+                    else:
+                        self.page += delta
+                        self.rebuild()
+                        await interaction.response.edit_message(embed=self.embed(), view=self,
+                            allowed_mentions=discord.AllowedMentions.none())
+            button.callback = navigate
+            self.add_item(button)
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                await self.message.edit(content="Deletion panel expired. Run schedular delete to reopen it.", view=None)
+            except discord.HTTPException:
+                pass
+
+
 class Schedular(commands.Cog):
     """Recurring announcements configured through embeds and buttons."""
     def __init__(self, bot):
@@ -233,7 +321,7 @@ class Schedular(commands.Cog):
     @commands.admin_or_permissions(manage_guild=True)
     @commands.bot_has_permissions(embed_links=True)
     async def schedular(self, ctx):
-        """Manage scheduled announcements. Use create, list or edit <ID>."""
+        """Manage scheduled announcements. Use create, list, delete or edit <ID>."""
         await ctx.send_help()
 
     async def open_panel(self, ctx, aid=None, record=None):
@@ -255,6 +343,19 @@ class Schedular(commands.Cog):
             await ctx.send("No announcement with that ID. Use schedular list.")
             return
         await self.open_panel(ctx, announcement_id, record)
+
+    @schedular.command(name="delete")
+    async def schedular_delete(self, ctx):
+        """Choose announcements to delete using letter buttons."""
+        records = await self.config.guild(ctx.guild).announcements()
+        if not records:
+            await ctx.send("No announcements to delete.")
+            return
+        view = DeletePicker(self, ctx, records)
+        self.panels = {p for p in self.panels if not p.is_finished()}
+        self.panels.add(view)
+        view.message = await ctx.send(embed=view.embed(), view=view,
+            allowed_mentions=discord.AllowedMentions.none())
 
     @schedular.command(name="list")
     async def schedular_list(self, ctx):
