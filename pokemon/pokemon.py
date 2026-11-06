@@ -811,7 +811,7 @@ class Pokemon(commands.Cog):
                     view=Menu(self, i.user.id, admin=True) if action == 'Settings' else None)
         fields = {
             'Notification role': [('Role ID', 'Enter a role ID or role mention; 0 disables pings')],
-            'Interval': [('Minutes', 'Default 30; minimum 1; maximum 1440')],
+            'Interval': [('Minutes', 'Default 30; minimum 5; maximum 1440')],
             'Role bonuses': [('Role ID', 'Use 0 to clear all role bonuses'), ('Multipliers', 'catch,shiny,rare,xp,candy e.g. 1.2,2,2,1.5,1')],
             'Give Pokémon': [('Member ID', 'Discord member ID'), ('Species', 'Pokédex number or species name')],
             'Take Pokémon': [('Member ID', 'Discord member ID'), ('Pokémon ID', 'ID from their PC box')],
@@ -844,7 +844,7 @@ class Pokemon(commands.Cog):
             state = await self.state(i.guild_id)
             if action == 'Interval':
                 minutes = int(values[0])
-                if not 1 <= minutes <= 1440: raise ValueError('Choose 1–1440 minutes.')
+                if not 5 <= minutes <= 1440: raise ValueError('Choose 5–1440 minutes.')
                 state['interval'] = minutes*60
                 state['next_spawn'] = time.time() + state['interval']
                 state['spawn'] = None
