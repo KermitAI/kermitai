@@ -429,18 +429,26 @@ class Polls(commands.Cog):
             await ctx.send("Poll and saved voting data deleted, including its results copy if present."
                 if delete else "Poll closed and final results posted.")
 
-    @commands.command()
+    @commands.hybrid_command()
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)
+    @discord.app_commands.describe(poll="Poll message ID or Discord message link")
     async def pollclose(self, ctx, *, poll: str):
         """Close a poll immediately and post results. Supply its message ID or link."""
+        if ctx.interaction:
+            await ctx.defer()
+        if ctx.interaction:
+            await ctx.defer()
         await self.manage_poll(ctx, poll)
 
-    @commands.command()
+    @commands.hybrid_command()
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)
+    @discord.app_commands.describe(poll="Poll message ID or Discord message link")
     async def polldelete(self, ctx, *, poll: str):
         """Delete a poll and its results copy without publishing new results."""
+        if ctx.interaction:
+            await ctx.defer()
         await self.manage_poll(ctx, poll, delete=True)
 
     async def red_delete_data_for_user(self, *, requester, user_id):
@@ -453,12 +461,16 @@ class Polls(commands.Cog):
                         await self.save(gid, pid, poll)
                         self.dirty.add((gid, pid))
 
-    @commands.command()
+    @commands.hybrid_command()
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)
     @commands.bot_has_permissions(embed_links=True)
     async def pollcreate(self, ctx):
         """Open a poll builder. Only the creator can operate its controls."""
+        if ctx.interaction:
+            await ctx.defer()
+        if ctx.interaction:
+            await ctx.defer()
         builder = Builder(self, ctx)
         self.builders = {b for b in self.builders if not b.is_finished()}
         self.builders.add(builder)

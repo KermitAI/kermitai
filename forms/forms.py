@@ -357,7 +357,8 @@ class Forms(commands.Cog):
                 async with self.lock(guild_id, user_id):
                     await self.config.member_from_ids(guild_id, user_id).clear()
 
-    @commands.group()
+    @commands.hybrid_group()
+    @discord.app_commands.default_permissions(manage_guild=True)
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)
     async def forms(self, ctx):
@@ -427,6 +428,8 @@ class Forms(commands.Cog):
         await self.build(ctx, form_id)
 
     async def build(self, ctx, form_id=None):
+        if ctx.interaction:
+            await ctx.defer()
         key = ctx.guild.id
         if key in self.builders:
             await ctx.send("A form builder is already open in this server.")
@@ -497,6 +500,8 @@ class Forms(commands.Cog):
     @forms.command(name="list")
     async def list_forms(self, ctx):
         """List saved form IDs."""
+        if ctx.interaction:
+            await ctx.defer()
         data = await self.config.guild(ctx.guild).forms()
         lines = [f"{key}: {form['name']} ({len(form['questions'])} questions)" for key, form in data.items()]
         if not lines:
@@ -507,6 +512,8 @@ class Forms(commands.Cog):
     @forms.command(name="delete")
     async def delete(self, ctx, form_id: str):
         """Delete a saved form and remove all its attached launch buttons."""
+        if ctx.interaction:
+            await ctx.defer()
         if ctx.guild.id in self.builders:
             await ctx.send("Finish or cancel the open form builder before deleting a form.")
             return
@@ -581,8 +588,15 @@ class Forms(commands.Cog):
             self.builders.discard(ctx.guild.id)
 
     @forms.command(name="attach")
-    async def attach(self, ctx, form_id: str, message: discord.Message, *, label: str = "Open form"):
+    async def attach(self, ctx, form_id: str, message: str, *, label: str = "Open form"):
         """Attach a form: forms attach <id> <message link> [button label]."""
+        if ctx.interaction:
+            await ctx.defer()
+        try:
+            message = await commands.MessageConverter().convert(ctx, message)
+        except commands.BadArgument:
+            await ctx.send("I couldn't find that message. Supply its message link or ID.")
+            return
         if form_id not in await self.config.guild(ctx.guild).forms():
             await ctx.send("Unknown form ID.")
             return

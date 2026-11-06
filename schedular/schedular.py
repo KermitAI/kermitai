@@ -318,7 +318,7 @@ class Schedular(commands.Cog):
                 log.exception("Scheduled announcement worker failed")
             await asyncio.sleep(30)
 
-    @commands.group(invoke_without_command=True)
+    @commands.hybrid_group(invoke_without_command=True)
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)
     @commands.bot_has_permissions(embed_links=True)
@@ -335,11 +335,13 @@ class Schedular(commands.Cog):
     @schedular.command(name="create")
     async def schedular_create(self, ctx):
         """Open the announcement builder."""
+        await ctx.defer()
         await self.open_panel(ctx)
 
     @schedular.command(name="edit")
     async def schedular_edit(self, ctx, announcement_id: str):
         """Edit, pause, resume or delete an announcement using its ID."""
+        await ctx.defer()
         record = await self.config.guild(ctx.guild).announcements.get_raw(announcement_id, default=None)
         if not record:
             await ctx.send("No announcement with that ID. Use schedular list.")
@@ -349,6 +351,7 @@ class Schedular(commands.Cog):
     @schedular.command(name="delete")
     async def schedular_delete(self, ctx):
         """Choose announcements to delete using letter buttons."""
+        await ctx.defer()
         records = await self.config.guild(ctx.guild).announcements()
         if not records:
             await ctx.send("No announcements to delete.")
@@ -362,6 +365,7 @@ class Schedular(commands.Cog):
     @schedular.command(name="list")
     async def schedular_list(self, ctx):
         """List saved announcement IDs and their schedules."""
+        await ctx.defer()
         records = await self.config.guild(ctx.guild).announcements()
         if not records:
             await ctx.send("No announcements yet. Use schedular create.")

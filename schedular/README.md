@@ -7,6 +7,8 @@ Install/load the `schedular` cog in Red, then use your bot prefix with:
 - `schedular list` — show saved schedules and their IDs.
 - `schedular edit <ID>` — change settings, pause/resume, or delete.
 
+All four commands also support slash invocation: `/schedular create`, `/schedular list`, `/schedular edit announcement_id:<ID>`, and `/schedular delete`. After updating, the bot owner should run `[p]reload schedular`, `[p]slash enable schedular`, then `[p]slash sync` to register the group with Discord. Prefix commands remain available.
+
 Requires Manage Server or bot administrator permission. Only the person who opens a panel can operate it. Changes take effect when **Save** is pressed; **Exit** discards changes. **Delete** removes the saved schedule immediately, leaving previously posted messages in place.
 
 Use **Message** and **Channel** to set the destination and content. **Interval** accepts whole minutes, hours, days or weeks, including shorthand such as `15m`, `2h`, `3d` and `1w` (minimum 15 minutes, maximum 365 days). The first post happens one interval after saving. **Daily times** switches to a daily schedule and accepts comma-separated 24-hour times, such as `09:00, 17:30`. Daily times must be at least 15 minutes apart, including across midnight. **Timezone** accepts IANA names such as `America/Toronto`; the default is UTC. Interval and daily modes are alternatives for each announcement. Create separate announcements if you need both.

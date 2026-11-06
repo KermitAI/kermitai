@@ -19,3 +19,21 @@ Checks: `python -m unittest discover -s polls/tests -v`. These exercise duration
 - `[p]polldelete <message ID or message link>` removes the poll message, saved votes, and any tracked results copy. It does not post new results.
 
 Both require administrator or Manage Server permission and work only on polls from the current server. Failed updates/deletions retry automatically; voting stays stopped. Completed polls finalized after this update retain only their message locations so they can be deleted too. Polls already completed before this update are no longer tracked and must be deleted manually in Discord.
+
+## Slash commands
+
+All three commands also support slash invocation: `/pollcreate`, `/pollclose poll:<message ID or link>`, and `/polldelete poll:<message ID or link>`. Prefix commands and permission requirements remain available as before.
+
+After updating, the bot owner should run:
+
+1. `[p]reload polls`
+2. `[p]slash enablecog Polls`
+3. `[p]slash sync`
+
+See [Red's slash command guide](https://docs.discord.red/en/stable/guide_slash_and_interactions.html) for enabling and syncing application commands. Slash close/delete take the message reference as a text option so Discord message IDs keep their full precision.
+
+## Slash commands
+
+All commands also support slash invocation and retain their prefix versions. /pollcreate, /pollclose, and /polldelete. Use a message link or ID for message references. Server-only restrictions and administrator checks apply to both invocation styles. Slash commands default to members with Manage Server permission.
+
+After updating and reloading the cog, the bot owner must enable and sync its application commands using Red’s slash-command management commands.

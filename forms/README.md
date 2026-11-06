@@ -29,3 +29,9 @@ The bot needs View Channel, Send Messages, and Attach Files in the response chan
 ## Validation
 
 Run `python -m unittest discover -s forms/tests`. These dependency-free checks validate answer types and syntax. A live Red/Discord smoke test is still required for button persistence, permissions, DM delivery, question navigation and channel delivery.
+
+## Slash commands
+
+All commands also support slash invocation and retain their prefix versions. /forms create, /forms edit, /forms list, /forms attach, and /forms delete. Use a message link or ID for message references. Server-only restrictions and administrator checks apply to both invocation styles. Slash commands default to members with Manage Server permission.
+
+After updating and reloading the cog, the bot owner must enable and sync its application commands using Red’s slash-command management commands.
