@@ -1,0 +1,11 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "Pokemon",
+  "short": "Opt-in Pokémon encounters, collections, trading, and friendly battles.",
+  "description": "Component-based Pokémon game with cached PokéAPI data, 30-minute encounters, family Candy, Stardust, a Red bank shop, trades, parties, and a basic battle engine. Disabled by default. Raids and complete cartridge move effects are not implemented.",
+  "min_bot_version": "3.5.0",
+  "requirements": ["aiohttp"],
+  "tags": ["pokemon", "game", "economy"],
+  "install_msg": "Use [p]pokeset to choose a spawn channel and explicitly enable Pokémon. Open [p]pokemon for the player menu. First use downloads and caches official PokéAPI CSV data; allow several minutes. See pokemon/README.md for rules and battle limitations.",
+  "end_user_data_statement": "Stores per-server trainer IDs, Pokémon, parties, inventory, XP, Candy, Stardust, trade proposals, and shop/trade order journals. Supports Red user deletion requests. Public encounter and trade messages remain in Discord."
+}
