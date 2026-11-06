@@ -148,12 +148,7 @@ class Spawn(View):
         self.add_item(button)
 
     async def open(self, i):
-        state = await self.cog.state(i.guild_id)
-        spawn = state.get('spawn')
-        if not state['enabled'] or not spawn or spawn.get('message') != i.message.id or spawn['expires'] <= time.time():
-            return await reply(i, 'Gone', 'This Pokémon is no longer available.')
-        await reply(i, 'Choose a ball', 'A ball is consumed per attempt. Everyone shares this encounter.',
-                    Catch(self.cog, i.user.id, spawn['id']))
+        await self.cog.open_catch(i, message_id=i.message.id)
 
 
 class Catch(View):
@@ -488,6 +483,18 @@ class Pokemon(commands.Cog):
             raise ValueError('There is no wild Pokémon to catch right now.')
         return spawn
 
+    async def open_catch(self, i, *, message_id=None):
+        # Acknowledge before Config/permission I/O: Discord allows only three seconds.
+        await i.response.defer(ephemeral=True, thinking=True)
+        try:
+            spawn = await self.current_encounter(i.guild_id, i.channel_id)
+            if message_id is not None and spawn['message'] != message_id:
+                raise ValueError('This Pokémon is no longer available. Use the newest spawn message.')
+        except ValueError as error:
+            return await reply(i, 'Cannot catch', str(error))
+        await reply(i, 'Choose a ball', 'A ball is consumed per attempt. Everyone shares this encounter.',
+                    Catch(self, i.user.id, spawn['id']))
+
     @commands.guild_only()
     @commands.bot_has_permissions(embed_links=True)
     @commands.command(name='pokecatch', aliases=['catch'])
@@ -667,9 +674,7 @@ class Pokemon(commands.Cog):
             items, dust = await self.spin_stop(i.guild_id, i.user.id)
             return await reply(i, 'Pokéstop rewards', self.stop_rewards(items, dust))
         if action == 'Catch':
-            spawn = await self.current_encounter(i.guild_id, i.channel_id)
-            return await reply(i, 'Choose a ball', 'Throw a ball before this Pokémon flees.',
-                               Catch(self, i.user.id, spawn['id']))
+            return await self.open_catch(i)
         if action in {'PC box','Inventory','Orders','Shop'}:
             await i.response.defer(ephemeral=True, thinking=True)
             state = await self.available(i.guild_id)

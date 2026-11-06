@@ -540,6 +540,37 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('secret',sent['embed'].description)
         self.assertNotIn('view',sent)
 
+    async def test_spawn_click_acknowledges_before_loading_and_opens_catch(self):
+        self.i.message=types.SimpleNamespace(id=10)
+        self.i.channel_id=5
+        async def read_encounter(gid,cid):
+            self.i.response.defer.assert_awaited_once_with(ephemeral=True,thinking=True)
+            return {'id':'s','message':10}
+        self.cog.current_encounter=AsyncMock(side_effect=read_encounter)
+        await game.Spawn(self.cog).open(self.i)
+        sent=self.i.followup.send.call_args.kwargs
+        self.assertEqual(sent['embed'].title,'Choose a ball')
+        self.assertIsInstance(sent['view'],game.Catch)
+        self.assertEqual(sent['view'].spawn_id,'s')
+        self.assertEqual(sent['view'].owner,1)
+
+    async def test_spawn_click_rejects_old_message_without_opening_menu(self):
+        self.i.channel_id=5
+        self.cog.current_encounter=AsyncMock(return_value={'id':'new','message':20})
+        await self.cog.open_catch(self.i,message_id=10)
+        sent=self.i.followup.send.call_args.kwargs
+        self.assertEqual(sent['embed'].title,'Cannot catch')
+        self.assertNotIn('view',sent)
+        self.assertNotIn('1',(await self.value())['players'])
+
+    async def test_spawn_click_handles_expiry_with_visible_followup(self):
+        self.i.channel_id=5
+        self.cog.current_encounter=AsyncMock(side_effect=ValueError('There is no wild Pokémon to catch right now.'))
+        await self.cog.open_catch(self.i,message_id=10)
+        sent=self.i.followup.send.call_args.kwargs
+        self.assertEqual(sent['embed'].title,'Cannot catch')
+        self.assertNotIn('view',sent)
+
     async def test_delete_removes_inventory_orders_and_attempts(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()
         s['orders']['o']={'user':1,'kind':'shop','status':'complete'}
