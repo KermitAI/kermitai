@@ -32,6 +32,13 @@ async def reply(i, title, text, view=None):
     else: await i.response.send_message(**kwargs)
 
 
+def encounter_embed(pokemon, title, text):
+    card = embed(title, text)
+    pokemon_id = int(pokemon.get('pokemon_id') or pokemon['species'])
+    card.set_image(url=f'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/{pokemon_id}.png')
+    return card
+
+
 ITEM_ICONS = {
     'poke-ball': '🔴', 'great-ball': '🔵', 'ultra-ball': '🟡', 'master-ball': '🟣',
     'premier-ball': '⚪', 'luxury-ball': '⚫', 'heal-ball': '🩷', 'net-ball': '🕸️',
@@ -306,7 +313,7 @@ class Pokemon(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420021, force_registration=True)
         self.config.register_guild(state={'enabled': False, 'channel': None, 'interval': 1800,
-            'next_spawn': 0, 'spawn': None, 'notify_role': None, 'roles': {}, 'players': {}, 'trades': {}, 'orders': {}})
+            'next_spawn': 0, 'spawn': None, 'pending_spawn_edits': {}, 'notify_role': None, 'roles': {}, 'players': {}, 'trades': {}, 'orders': {}})
         self.dex = Dex(cog_data_path(self) / 'dex')
         self.locks, self.bank_locks, self.views = {}, {}, set()
         self.active_battles = {}
@@ -335,6 +342,7 @@ class Pokemon(commands.Cog):
     async def state(self, gid):
         state = await self.config.guild_from_id(gid).state()
         state.setdefault('notify_role', None)
+        state.setdefault('pending_spawn_edits', {})
         # Bound old encounters, whose expiry was tied to the spawn interval.
         spawn = state.get('spawn')
         if spawn:
@@ -522,6 +530,7 @@ class Pokemon(commands.Cog):
             try:
                 state = await self.state(gid)
                 if not self.bot.get_guild(gid): continue
+                await self.retry_spawn_edits(gid)
                 if state['spawn']:
                     self.schedule_expiry(gid, state['spawn'])
                     await self.expire_spawn(gid, state['spawn']['id'])
@@ -562,12 +571,28 @@ class Pokemon(commands.Cog):
         guild = self.bot.get_guild(gid)
         channel_id = spawn.get('channel') or (await self.state(gid))['channel']
         channel = guild and guild.get_channel(channel_id)
-        if not channel or not spawn.get('message'): return
+        if not spawn.get('message'): return True
+        if not channel: return False
         try:
             await channel.get_partial_message(spawn['message']).edit(
-                embed=embed(title, text), view=None, allowed_mentions=discord.AllowedMentions.none())
+                embed=encounter_embed(spawn['pokemon'], title, text), view=None,
+                allowed_mentions=discord.AllowedMentions.none())
+        except discord.NotFound:
+            return True  # A deleted announcement cannot be updated or retried.
         except discord.HTTPException:
-            log.warning('Unable to update Pokémon encounter %s in guild %s', spawn['id'], gid)
+            log.warning('Unable to update Pokémon encounter %s in guild %s; will retry flee notices', spawn['id'], gid, exc_info=True)
+            return False
+        return True
+
+    async def retry_spawn_edits(self, gid):
+        pending = (await self.state(gid))['pending_spawn_edits']
+        for spawn_id, record in list(pending.items())[:5]:
+            if not await self.edit_encounter(gid, record['spawn'], record['title'], record['text']):
+                continue
+            async with self.lock(gid):
+                state = await self.state(gid)
+                state['pending_spawn_edits'].pop(spawn_id, None)
+                await self.save(gid, state)
 
     async def expire_spawn(self, gid, spawn_id):
         async with self.lock(gid):
@@ -575,9 +600,13 @@ class Pokemon(commands.Cog):
             spawn = state['spawn']
             if not spawn or spawn['id'] != spawn_id or spawn['expires'] > time.time(): return False
             state['spawn'] = None
+            state['pending_spawn_edits'][spawn_id] = {
+                'spawn': copy.deepcopy(spawn), 'title': 'The wild Pokémon fled!',
+                'text': f"**{spawn['pokemon']['name'].replace('-', ' ').title()}** fled! The five-minute encounter has ended.",
+            }
+            # Save the edit alongside expiry so a disconnect/reload cannot lose it.
             await self.save(gid, state)
-        await self.edit_encounter(gid, spawn, 'The wild Pokémon fled!',
-                                  f"{spawn['pokemon']['name'].replace('-', ' ').title()} escaped after five minutes.")
+        await self.retry_spawn_edits(gid)
         return True
 
     async def spawn(self, gid):
@@ -605,7 +634,7 @@ class Pokemon(commands.Cog):
             can_ping = role and not role.is_default() and not role.managed and (
                 role.mentionable or channel.permissions_for(guild.me).mention_everyone)
             message = await channel.send(content=f'<@&{role.id}>' if can_ping else None,
-                embed=embed('A wild Pokémon appeared!',
+                embed=encounter_embed(pokemon, 'A wild Pokémon appeared!',
                 f"**{species['name'].replace('-', ' ').title()}** · Level {pokemon['level']}\nUse the Catch button or the pokecatch command to throw a ball. Fleeing <t:{int(now + ENCOUNTER_SECONDS)}:R> (five minutes)."),
                 view=self.spawn_view,
                 allowed_mentions=discord.AllowedMentions(everyone=False, users=False,

@@ -51,6 +51,7 @@ class Embed(Component):
         self.fields=[]
     def add_field(self, **kwargs): self.fields.append(types.SimpleNamespace(**kwargs))
     def set_thumbnail(self, **kwargs): self.thumbnail=kwargs
+    def set_image(self, **kwargs): self.image=kwargs
     def set_footer(self, **kwargs): self.footer=kwargs
 
 
@@ -62,6 +63,7 @@ modules = {
         Embed=Embed, utils=types.SimpleNamespace(escape_markdown=lambda text:text), ButtonStyle=types.SimpleNamespace(danger=1, success=2, secondary=3),
         ChannelType=types.SimpleNamespace(text=0), Status=types.SimpleNamespace(offline='offline'),
         HTTPException=type('HTTPException',(Exception,),{}),
+        NotFound=type('NotFound',(Exception,),{}),
         AllowedMentions=type('AllowedMentions',(Component,),{'none':staticmethod(lambda:None)})),
     'discord.ext': types.SimpleNamespace(tasks=types.SimpleNamespace(loop=lambda **kw:lambda fn:Loop(fn))),
     'redbot': types.ModuleType('redbot'),
@@ -367,6 +369,9 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone((await self.value())['spawn'])
         self.assertIsNone(message.edit.call_args.kwargs['view'])
         self.assertEqual(message.edit.call_args.kwargs['embed'].title,'The wild Pokémon fled!')
+        self.assertIn('fled',message.edit.call_args.kwargs['embed'].description)
+        self.assertTrue(message.edit.call_args.kwargs['embed'].image['url'].endswith('/1.png'))
+        self.assertEqual((await self.cog.state(1))['pending_spawn_edits'],{})
         self.assertFalse(await self.cog.expire_spawn(1,'s'))
         message.edit.assert_awaited_once()
 
@@ -415,6 +420,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored['next_spawn'],2800)
         sent=channel.send.call_args.kwargs
         self.assertEqual(sent['content'],'<@&123>')
+        self.assertTrue(sent['embed'].image['url'].endswith('/1.png'))
         self.assertEqual(sent['allowed_mentions'].roles,[role])
         self.assertFalse(sent['allowed_mentions'].everyone)
         self.assertFalse(sent['allowed_mentions'].users)
@@ -570,6 +576,25 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         sent=self.i.followup.send.call_args.kwargs
         self.assertEqual(sent['embed'].title,'Cannot catch')
         self.assertNotIn('view',sent)
+
+    async def test_flee_notice_retries_after_failed_edit_and_survives_new_spawn(self):
+        s=state(); s['spawn']={'id':'old','pokemon':pokemon(),'spawned_at':100,
+                              'expires':400,'channel':5,'message':10,'attempts':{}}
+        await self.value.set(s)
+        self.cog.edit_encounter=AsyncMock(return_value=False)
+        with patch.object(game.time,'time',return_value=400):
+            self.assertTrue(await self.cog.expire_spawn(1,'old'))
+        stored=await self.value()
+        self.assertIsNone(stored['spawn'])
+        self.assertIn('old',stored['pending_spawn_edits'])
+        stored['spawn']={'id':'new','pokemon':pokemon(),'spawned_at':500,'expires':800,'message':20}
+        await self.value.set(stored)
+        self.cog.edit_encounter.return_value=True
+        await self.cog.retry_spawn_edits(1)
+        stored=await self.value()
+        self.assertEqual(stored['pending_spawn_edits'],{})
+        self.assertEqual(stored['spawn']['id'],'new')
+        self.assertEqual(self.cog.edit_encounter.call_args.args[1]['message'],10)
 
     async def test_delete_removes_inventory_orders_and_attempts(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()
