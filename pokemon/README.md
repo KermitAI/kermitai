@@ -7,7 +7,7 @@ An opt-in Red 3.5+ cog combining GO-style collection resources with main-series 
 1. Install/load `pokemon` through your normal Red cog workflow.
 2. Run `[p]pokeset`. Click **Spawn channel** to open the channel dropdown. Other settings use buttons, with modals for typed input.
 3. Choose **Enable / disable** to enable this server. Every server starts disabled.
-4. Players open `[p]pokemon` (alias `[p]poke`). All subsequent input uses embeds, buttons, dropdowns, and modals. Moderator settings remain usable while the game is disabled.
+4. Players open `[p]pokemon` (alias `[p]poke`) for an icon-labelled button menu. **Inventory** shows a grouped item bag with icons, quantities, Stardust, and total family Candy; depleted items are hidden. All subsequent input uses embeds, buttons, dropdowns, and modals. Moderator settings remain usable while the game is disabled.
 
 Grant View Channel, Send Messages, and Embed Links in the selected channel. The first encounter occurs after the configured interval, default **30 minutes**. The scheduler checks every 30 seconds. One public encounter exists per server. Each Pokémon stays for **five minutes**, then flees if nobody has caught it; its message changes to a flee notice and the catch button is removed. The encounter timer is separate from the spawn interval. If the interval is shorter than five minutes, a new spawn waits for the current encounter to end. Restarting restores the original expiry deadline and does not produce a backlog of spawns. Catch buttons survive restarts. Other menus and pending trade buttons should be reopened after a reload.
 

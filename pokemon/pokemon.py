@@ -32,6 +32,48 @@ async def reply(i, title, text, view=None):
     else: await i.response.send_message(**kwargs)
 
 
+ITEM_ICONS = {
+    'poke-ball': '🔴', 'great-ball': '🔵', 'ultra-ball': '🟡', 'master-ball': '🟣',
+    'premier-ball': '⚪', 'luxury-ball': '⚫', 'heal-ball': '🩷', 'net-ball': '🕸️',
+    'dive-ball': '🌊', 'nest-ball': '🪺', 'repeat-ball': '🔁', 'timer-ball': '⏳',
+    'quick-ball': '⚡', 'dusk-ball': '🌙', 'level-ball': '📶', 'lure-ball': '🎣',
+    'moon-ball': '🌘', 'friend-ball': '💚', 'love-ball': '💗', 'heavy-ball': '🏋️',
+    'fast-ball': '💨', 'sport-ball': '🏅', 'safari-ball': '🌿', 'beast-ball': '🔷',
+    'dream-ball': '💭', 'cherish-ball': '❤️', 'feather-ball': '🪶', 'wing-ball': '🪽',
+    'jet-ball': '🚀', 'leaden-ball': '🪨', 'gigaton-ball': '⚙️', 'origin-ball': '🌌',
+    'strange-ball': '🟢', 'potion': '🧪', 'super-potion': '⚗️', 'hyper-potion': '💊',
+    'max-potion': '💖', 'revive': '💎', 'max-revive': '🌟',
+    'razz-berry': '🍓', 'pinap-berry': '🍍',
+}
+
+
+def inventory_embed(member, player):
+    owned = {item: quantity for item, quantity in player['items'].items() if quantity > 0}
+    total = sum(owned.values())
+    card = embed('🎒 Pokémon Bag',
+        f"**{discord.utils.escape_markdown(member.display_name)}**\n"
+        f"**{total:,}** items · **{len(owned)}** different supplies\n\n"
+        f"✨ **Stardust**  `{player['dust']:,}`    🍬 **Candy**  `{sum(player['candy'].values()):,}`")
+    groups = [
+        ('🔴 Poké Balls', lambda item: item in BALLS),
+        ('🧪 Potions & Revives', lambda item: 'potion' in item or 'revive' in item),
+        ('🍓 Berries', lambda item: item.endswith('-berry')),
+        ('📦 Other supplies', lambda item: item not in BALLS and 'potion' not in item
+                                        and 'revive' not in item and not item.endswith('-berry')),
+    ]
+    for title, matches in groups:
+        lines = [f"{ITEM_ICONS.get(item, '📦')} **{item.replace('-', ' ').title()}**  × `{quantity:,}`"
+                 for item, quantity in sorted(owned.items()) if matches(item)]
+        for start in range(0, len(lines), 12):
+            card.add_field(name=title if start == 0 else f'{title} · continued',
+                           value='\n'.join(lines[start:start + 12]), inline=False)
+    if not owned:
+        card.add_field(name='📦 Your bag is empty', value='Spin a Pokéstop for free supplies, or visit the Pokéshop.', inline=False)
+    card.set_thumbnail(url=str(member.display_avatar.url))
+    card.set_footer(text='📍 Pokéstop: free supplies every 5 minutes • 🛒 Shop: restock with your currency')
+    return card
+
+
 class View(discord.ui.View):
     def __init__(self, cog, owner=None, timeout=180):
         super().__init__(timeout=timeout)
@@ -187,16 +229,23 @@ class Menu(View):
                 button.callback = choose
                 self.add_item(button)
             return
-        actions = ['Trainer', 'Other trainer', 'PC box', 'Inspect', 'Party', 'Transfer', 'Power up', 'Evolve', 'Shop',
-                   'Inventory', 'Trade', 'Battle', 'Pokéstop', 'Catch', 'Orders']
-        select = discord.ui.Select(placeholder='Choose an action', options=[discord.SelectOption(label=a) for a in actions])
-        async def choose(i):
-            try:
-                await cog.route(i, select.values[0])
-            except ValueError as error:
-                await reply(i, 'Unable to complete', str(error))
-        select.callback = choose
-        self.add_item(select)
+        actions = [
+            ('Trainer', '🪪'), ('Other trainer', '👥'), ('PC box', '🗃️'),
+            ('Inspect', '🔎'), ('Party', '⭐'), ('Transfer', '📤'),
+            ('Power up', '⬆️'), ('Evolve', '✨'), ('Inventory', '🎒'),
+            ('Shop', '🛒'), ('Pokéstop', '📍'), ('Catch', '🔴'),
+            ('Trade', '🤝'), ('Battle', '⚔️'), ('Orders', '🧾'),
+        ]
+        for index, (action, icon) in enumerate(actions):
+            style = discord.ButtonStyle.success if action in {'Catch', 'Pokéstop'} else discord.ButtonStyle.secondary
+            button = discord.ui.Button(label=action, emoji=icon, style=style, row=index // 3)
+            async def choose(i, action=action):
+                try:
+                    await cog.route(i, action)
+                except ValueError as error:
+                    await reply(i, 'Unable to complete', str(error))
+            button.callback = choose
+            self.add_item(button)
 
 
 class Box(View):
@@ -404,7 +453,7 @@ class Pokemon(commands.Cog):
         state = await self.state(ctx.guild.id)
         if not state['enabled']:
             return await ctx.send(embed=embed('Pokémon disabled', 'An administrator can configure and enable this game with pokeset.'))
-        await ctx.send(embed=embed('Pokémon', 'Catch wild Pokémon, manage your party, shop, and trade. Use the menu below.'),
+        await ctx.send(embed=embed('Pokémon', 'Choose your next adventure using the buttons below.\n\n🪪 **Trainer & collection** · View cards, browse your PC, and build your party.\n🎒 **Supplies & growth** · Manage items, power up, and evolve.\n🔴 **Explore & play** · Catch Pokémon, spin Pokéstops, trade, and battle.'),
                        view=Menu(self, ctx.author.id))
 
     @commands.guild_only()
@@ -628,7 +677,9 @@ class Pokemon(commands.Cog):
             if action == 'PC box':
                 view = Box(self, i.user.id, list(player['box'].values()))
                 return await i.followup.send(embed=view.render(), view=view, ephemeral=True)
-            if action == 'Inventory': return await reply(i, 'Inventory', '\n'.join(f'{k}: {v}' for k,v in player['items'].items()) or 'Empty')
+            if action == 'Inventory':
+                return await i.followup.send(embed=inventory_embed(i.user, player), ephemeral=True,
+                                              allowed_mentions=discord.AllowedMentions.none())
             if action == 'Orders': return await self.orders(i, state)
             if action == 'Shop':
                 return await reply(i, 'Pokéshop', '\n'.join(f'{k}: {v:,}' for k,v in ITEMS.items()) + '\nPrices use the shared bot bank. Specialty balls without a listed bonus use their base catch rate.', Shop(self, i.user.id))
