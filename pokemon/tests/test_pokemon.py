@@ -45,12 +45,21 @@ class Component:
         self.values = []
 
 
+class Embed(Component):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.fields=[]
+    def add_field(self, **kwargs): self.fields.append(types.SimpleNamespace(**kwargs))
+    def set_thumbnail(self, **kwargs): self.thumbnail=kwargs
+    def set_footer(self, **kwargs): self.footer=kwargs
+
+
 bank = types.SimpleNamespace()
 modules = {
     PKG: pkg,
     'discord': types.SimpleNamespace(ui=types.SimpleNamespace(View=View, Modal=View, Button=Component,
         Select=Component, TextInput=Component, ChannelSelect=Component, RoleSelect=Component), SelectOption=Component,
-        Embed=Component, ButtonStyle=types.SimpleNamespace(danger=1, success=2, secondary=3),
+        Embed=Embed, utils=types.SimpleNamespace(escape_markdown=lambda text:text), ButtonStyle=types.SimpleNamespace(danger=1, success=2, secondary=3),
         ChannelType=types.SimpleNamespace(text=0), Status=types.SimpleNamespace(offline='offline'),
         HTTPException=type('HTTPException',(Exception,),{}),
         AllowedMentions=type('AllowedMentions',(Component,),{'none':staticmethod(lambda:None)})),
@@ -58,7 +67,7 @@ modules = {
     'redbot': types.ModuleType('redbot'),
     'redbot.core': types.SimpleNamespace(Config=object, bank=bank, commands=types.SimpleNamespace(
         Cog=object, guild_only=decorator, bot_has_permissions=decorator, command=decorator,
-        admin_or_permissions=decorator, is_owner=decorator)),
+        admin_or_permissions=decorator, mod_or_permissions=decorator, is_owner=decorator)),
     'redbot.core.data_manager': types.SimpleNamespace(cog_data_path=lambda cog: ROOT),
     'aiohttp': types.ModuleType('aiohttp'),
 }
@@ -165,13 +174,15 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
                                            all_guilds=AsyncMock(return_value={1:{}}))
         self.cog.locks={}; self.cog.bank_locks={}; self.cog.active_battles={}; self.cog.views=set(); self.cog.expiry_tasks={}
         self.cog.dex=dex()
-        self.user=types.SimpleNamespace(id=1,roles=[])
-        self.other=types.SimpleNamespace(id=2,roles=[])
+        self.user=types.SimpleNamespace(id=1,roles=[],display_name='Trainer One',name='one',display_avatar=types.SimpleNamespace(url='https://example.com/one.png'),guild_permissions=types.SimpleNamespace(administrator=False,manage_guild=False,manage_messages=False))
+        self.other=types.SimpleNamespace(id=2,roles=[],display_name='Trainer Two',name='two',display_avatar=types.SimpleNamespace(url='https://example.com/two.png'))
         self.guild=types.SimpleNamespace(id=1,get_member=lambda uid:{1:self.user,2:self.other}.get(uid), get_channel=lambda cid:None)
+        self.user.guild=self.guild; self.other.guild=self.guild
+        self.guild.members=[self.user,self.other]
         self.cog.bot=types.SimpleNamespace(get_cog=lambda n:self.cog,get_guild=lambda gid:self.guild,
             cog_disabled_in_guild=AsyncMock(return_value=False),is_owner=AsyncMock(return_value=True))
         self.i=types.SimpleNamespace(guild_id=1,guild=self.guild,user=self.user,
-            response=types.SimpleNamespace(is_done=lambda:True),followup=types.SimpleNamespace(send=AsyncMock()))
+            response=types.SimpleNamespace(is_done=lambda:True,defer=AsyncMock(),send_modal=AsyncMock()),followup=types.SimpleNamespace(send=AsyncMock()))
         bank.is_global=AsyncMock(return_value=False)
         bank.withdraw_credits=AsyncMock(); bank.deposit_credits=AsyncMock()
         bank.get_currency_name=AsyncMock(return_value='Coins')
@@ -184,7 +195,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ball_options,len(rules.BALLS))
         game.Menu(self.cog,1)
         admin_menu=game.Menu(self.cog,1,admin=True)
-        self.assertEqual(len(admin_menu.children),12)
+        self.assertEqual(len(admin_menu.children),13)
         self.assertTrue(all(hasattr(child,'label') and not hasattr(child,'options') for child in admin_menu.children))
         self.cog.route=AsyncMock()
         for button in admin_menu.children:
@@ -459,6 +470,75 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.user.guild_permissions=types.SimpleNamespace(administrator=False)
         await self.cog.set_notification_role(self.i,'123')
         self.assertNotIn('notify_role',await self.value())
+
+    async def test_settings_toggle_orders_reply_without_invalid_null_views(self):
+        async def strict_send(**kwargs):
+            if 'view' in kwargs and kwargs['view'] is None:
+                raise TypeError('expected View not NoneType')
+        self.i.followup.send.side_effect=strict_send
+        menu=game.Menu(self.cog,1,admin=True)
+        for action in ('Settings','Enable / disable','Orders'):
+            button=next(b for b in menu.children if b.label==action)
+            await button.callback(self.i)
+            self.i.response.defer.assert_awaited_with(ephemeral=True,thinking=True)
+            sent=self.i.followup.send.call_args.kwargs
+            if action=='Settings':
+                self.assertIsInstance(sent['view'],game.Menu)
+            else:
+                self.assertNotIn('view',sent)
+        self.assertFalse((await self.value())['enabled'])
+        await next(b for b in menu.children if b.label=='Enable / disable').callback(self.i)
+        self.assertTrue((await self.value())['enabled'])
+
+    async def test_trainer_card_uses_target_balance_nickname_and_unique_species(self):
+        s=state(); player=rules.account(s,2)
+        player['box']={'a':pokemon('a',1),'b':pokemon('b',1),'c':pokemon('c',2)}
+        await self.value.set(s)
+        card=await self.cog.trainer_card(self.other)
+        fields={f.name:f.value for f in card.fields}
+        self.assertIn('Trainer Two',card.description)
+        self.assertEqual(fields['Money'],'1,000 Coins')
+        self.assertEqual(fields['Pokédex'],'2 unique species')
+        self.assertEqual(fields['Pokémon owned'],'3')
+        bank.get_balance.assert_awaited_once_with(self.other)
+        self.assertEqual(card.thumbnail['url'],self.other.display_avatar.url)
+
+    async def test_other_trainer_card_does_not_change_or_create_accounts(self):
+        before=await self.value()
+        await self.cog.show_trainer(self.i,self.other)
+        self.assertIn('Trainer Two',self.i.followup.send.call_args.kwargs['embed'].description)
+        self.assertEqual(await self.value(),before)
+
+    async def test_member_lookup_accepts_mention_and_rejects_ambiguous_names(self):
+        self.assertIs(self.cog.resolve_member(self.guild,'<@!2>'),self.other)
+        self.assertIs(self.cog.resolve_member(self.guild,'Trainer Two'),self.other)
+        self.other.display_name='Trainer One'
+        with self.assertRaisesRegex(ValueError,'multiple'): self.cog.resolve_member(self.guild,'Trainer One')
+
+    async def test_staff_box_is_private_and_labels_target_owner(self):
+        s=state(); rules.account(s,2)['box']['abc']=pokemon(); await self.value.set(s)
+        await self.cog.show_member_box(self.i,self.other)
+        sent=self.i.followup.send.call_args.kwargs
+        self.assertTrue(sent['ephemeral'])
+        self.assertIn('Trainer Two',sent['embed'].title)
+        self.assertIn('abc',sent['embed'].description)
+        self.assertEqual(sent['view'].owner,1)
+        self.assertTrue(sent['view'].staff_only)
+        self.cog.bot.is_owner.return_value=False
+        self.cog.bot.is_admin=AsyncMock(return_value=False)
+        self.cog.bot.is_mod=AsyncMock(return_value=False)
+        self.assertFalse(await sent['view'].interaction_check(self.i))
+
+    async def test_nonstaff_cannot_open_another_box(self):
+        self.cog.bot.is_owner.return_value=False
+        self.cog.bot.is_admin=AsyncMock(return_value=False)
+        self.cog.bot.is_mod=AsyncMock(return_value=False)
+        s=state(); rules.account(s,2)['box']['secret']=pokemon(); await self.value.set(s)
+        await self.cog.show_member_box(self.i,self.other)
+        sent=self.i.followup.send.call_args.kwargs
+        self.assertEqual(sent['embed'].title,'Staff only')
+        self.assertNotIn('secret',sent['embed'].description)
+        self.assertNotIn('view',sent)
 
     async def test_delete_removes_inventory_orders_and_attempts(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()

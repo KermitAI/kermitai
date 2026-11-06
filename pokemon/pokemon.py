@@ -25,8 +25,9 @@ def embed(title, text):
 
 
 async def reply(i, title, text, view=None):
-    kwargs = dict(embed=embed(title, text), ephemeral=True, view=view,
+    kwargs = dict(embed=embed(title, text), ephemeral=True,
                   allowed_mentions=discord.AllowedMentions.none())
+    if view is not None: kwargs["view"] = view
     if i.response.is_done(): await i.followup.send(**kwargs)
     else: await i.response.send_message(**kwargs)
 
@@ -62,7 +63,7 @@ class Input(discord.ui.Modal):
             self.add_item(discord.ui.TextInput(label=label[:45], placeholder=placeholder[:100], max_length=500))
 
     async def on_submit(self, i):
-        await i.response.defer(ephemeral=True)
+        await i.response.defer(ephemeral=True, thinking=True)
         if self.cog.bot.get_cog('Pokemon') is not self.cog:
             return await reply(i, 'Reloaded', 'Open the menu again.')
         try:
@@ -86,7 +87,7 @@ class Confirm(View):
         if self.used:
             return await reply(i, 'Already submitted', 'This confirmation has already been used.')
         self.used = True
-        await i.response.defer(ephemeral=True)
+        await i.response.defer(ephemeral=True, thinking=True)
         try:
             await self.action(i)
         except ValueError as error:
@@ -139,7 +140,7 @@ class Catch(View):
         self.add_item(button)
 
     async def throw(self, i):
-        await i.response.defer(ephemeral=True)
+        await i.response.defer(ephemeral=True, thinking=True)
         try:
             message = await self.cog.catch(i, self.spawn_id, self.ball, self.berry)
             await reply(i, 'Catch result', message)
@@ -172,7 +173,7 @@ class Menu(View):
         self.admin_menu = admin
         if admin:
             actions = ['Settings', 'Enable / disable', 'Spawn channel', 'Interval',
-                       'Notification role', 'Role bonuses', 'Give Pokémon', 'Take Pokémon',
+                       'Notification role', 'Role bonuses', 'View PC box', 'Give Pokémon', 'Take Pokémon',
                        'Give / take items', 'Force evolve', 'Wipe box', 'Orders']
             for index, action in enumerate(actions):
                 button = discord.ui.Button(label=action, row=index // 4,
@@ -186,7 +187,7 @@ class Menu(View):
                 button.callback = choose
                 self.add_item(button)
             return
-        actions = ['Trainer', 'PC box', 'Inspect', 'Party', 'Transfer', 'Power up', 'Evolve', 'Shop',
+        actions = ['Trainer', 'Other trainer', 'PC box', 'Inspect', 'Party', 'Transfer', 'Power up', 'Evolve', 'Shop',
                    'Inventory', 'Trade', 'Battle', 'Pokéstop', 'Catch', 'Orders']
         select = discord.ui.Select(placeholder='Choose an action', options=[discord.SelectOption(label=a) for a in actions])
         async def choose(i):
@@ -199,8 +200,9 @@ class Menu(View):
 
 
 class Box(View):
-    def __init__(self, cog, owner, pokemon):
+    def __init__(self, cog, owner, pokemon, member=None, staff_only=False):
         super().__init__(cog, owner)
+        self.member, self.staff_only = member, staff_only
         self.pokemon, self.page = pokemon, 0
         for name, delta in [('Previous', -1), ('Next', 1)]:
             button = discord.ui.Button(label=name)
@@ -210,9 +212,32 @@ class Box(View):
             button.callback = move
             self.add_item(button)
 
+    async def interaction_check(self, i):
+        if not await super().interaction_check(i): return False
+        if self.staff_only and not await self.cog.staff(i): return False
+        return True
+
     def render(self):
         lines = [f"`{p['id']}` {'✨ ' if p['shiny'] else ''}{p['name']} · Lv {p['level']}" for p in self.pokemon[self.page*15:self.page*15+15]]
-        return embed(f'PC box · page {self.page+1}', '\n'.join(lines) or 'Your box is empty. Catch a wild Pokémon to begin.')
+        name = f"{discord.utils.escape_markdown(self.member.display_name)}'s PC box" if self.member else 'PC box'
+        return embed(f'{name} · page {self.page+1}', '\n'.join(lines) or 'Your box is empty. Catch a wild Pokémon to begin.')
+
+
+class MemberLookup(View):
+    def __init__(self, cog, owner, staff_box=False):
+        super().__init__(cog, owner)
+        button = discord.ui.Button(label='View member PC box' if staff_box else 'View another trainer',
+                                   style=discord.ButtonStyle.secondary)
+        async def choose(i):
+            if staff_box and not await cog.staff(i): return
+            async def lookup(current, member_text):
+                member = cog.resolve_member(current.guild, member_text)
+                if staff_box: await cog.show_member_box(current, member)
+                else: await cog.show_trainer(current, member)
+            await i.response.send_modal(Input(cog, 'View member PC box' if staff_box else 'Trainer card',
+                [('Member', 'Discord ID, mention, or exact nickname')], lookup))
+        button.callback = choose
+        self.add_item(button)
 
 
 class Trade(View):
@@ -222,7 +247,7 @@ class Trade(View):
         for label, accept in [('Accept trade', True), ('Decline trade', False)]:
             button = discord.ui.Button(label=label, style=discord.ButtonStyle.success if accept else discord.ButtonStyle.secondary)
             async def respond(i, accept=accept):
-                await i.response.defer(ephemeral=True)
+                await i.response.defer(ephemeral=True, thinking=True)
                 try:
                     await cog.finish_trade(i, trade_id, accept)
                 except ValueError as error:
@@ -283,6 +308,84 @@ class Pokemon(commands.Cog):
         if await self.bot.is_owner(i.user) or i.user.guild_permissions.administrator or await self.bot.is_admin(i.user): return True
         await reply(i, 'Administrator only', 'You need server administrator permissions or a configured bot admin role.')
         return False
+
+    async def staff(self, i):
+        if self.bot.get_cog('Pokemon') is not self:
+            await reply(i, 'Reloaded', 'Open the Pokémon menu again.')
+            return False
+        permissions = i.user.guild_permissions
+        if (await self.bot.is_owner(i.user) or permissions.administrator
+                or permissions.manage_guild or permissions.manage_messages
+                or await self.bot.is_admin(i.user) or await self.bot.is_mod(i.user)):
+            return True
+        await reply(i, 'Staff only', 'Only server staff can view other members’ PC boxes.')
+        return False
+
+    @staticmethod
+    def resolve_member(guild, text):
+        value = text.strip()
+        member_id = value.removeprefix('<@').removeprefix('!').removesuffix('>')
+        if member_id.isdecimal():
+            member = guild.get_member(int(member_id))
+            if member: return member
+        else:
+            matches = [m for m in guild.members if value.casefold() in
+                       {m.display_name.casefold(), m.name.casefold()}]
+            if len(matches) == 1: return matches[0]
+            if len(matches) > 1: raise ValueError('That name matches multiple members. Use a Discord ID or mention.')
+        raise ValueError('Member not found in this server. Use their Discord ID or mention.')
+
+    async def trainer_card(self, member):
+        state = await self.available(member.guild.id, load_dex=False)
+        player = account(state, member.id)
+        unique = len({p['species'] for p in player['box'].values()})
+        balance = await bank.get_balance(member)
+        currency = await bank.get_currency_name(member.guild)
+        card = embed('Trainer Card', f"**{discord.utils.escape_markdown(member.display_name)}**\nTrainer ID: `{member.id}`")
+        card.add_field(name='Money', value=f'{balance:,} {currency}')
+        card.add_field(name='Pokédex', value=f'{unique:,} unique species')
+        card.add_field(name='Pokémon owned', value=f"{len(player['box']):,}")
+        card.add_field(name='Trainer level', value=str(min(50, 1 + int((player['xp']/1000)**.5))))
+        card.add_field(name='XP', value=f"{player['xp']:,}")
+        card.add_field(name='Stardust', value=f"{player['dust']:,}")
+        card.set_thumbnail(url=str(member.display_avatar.url))
+        card.set_footer(text='Pokédex counts currently owned species; duplicates and alternate forms count once.')
+        return card
+
+    async def show_trainer(self, i, member):
+        if not i.response.is_done(): await i.response.defer(ephemeral=True, thinking=True)
+        await i.followup.send(embed=await self.trainer_card(member), ephemeral=True,
+            view=MemberLookup(self, i.user.id), allowed_mentions=discord.AllowedMentions.none())
+
+    async def show_member_box(self, i, member):
+        if not await self.staff(i): return
+        if not i.response.is_done(): await i.response.defer(ephemeral=True, thinking=True)
+        state = await self.state(i.guild_id)
+        player = account(state, member.id)
+        view = Box(self, i.user.id, list(player['box'].values()), member=member, staff_only=True)
+        await i.followup.send(embed=view.render(), view=view, ephemeral=True,
+                              allowed_mentions=discord.AllowedMentions.none())
+
+    @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    @commands.command(name='trainer', aliases=['trainercard'])
+    async def trainer(self, ctx):
+        """View your trainer card, or use its button to view another member."""
+        try:
+            card = await self.trainer_card(ctx.author)
+        except ValueError as error:
+            return await ctx.send(embed=embed('Trainer card unavailable', str(error)))
+        await ctx.send(embed=card, view=MemberLookup(self, ctx.author.id),
+                       allowed_mentions=discord.AllowedMentions.none())
+
+    @commands.guild_only()
+    @commands.mod_or_permissions(manage_guild=True)
+    @commands.bot_has_permissions(embed_links=True)
+    @commands.command(name='pokebox')
+    async def pokebox(self, ctx):
+        """Staff: privately inspect another member’s PC box."""
+        await ctx.send(embed=embed('Staff PC inspection', 'Use the button to choose a member. Their box will be shown privately.'),
+                       view=MemberLookup(self, ctx.author.id, staff_box=True))
 
     async def available(self, gid, *, load_dex=True):
         state = await self.state(gid)
@@ -504,20 +607,24 @@ class Pokemon(commands.Cog):
     async def route(self, i, action, admin=False):
         if admin:
             return await self.admin_route(i, action)
+        if action == 'Trainer':
+            return await self.show_trainer(i, i.user)
+        if action == 'Other trainer':
+            async def lookup(current, text):
+                await self.show_trainer(current, self.resolve_member(current.guild, text))
+            return await i.response.send_modal(Input(self, 'Trainer card', [('Member', 'Discord ID, mention, or exact nickname')], lookup))
         if action == 'Pokéstop':
-            await i.response.defer(ephemeral=True)
+            await i.response.defer(ephemeral=True, thinking=True)
             items, dust = await self.spin_stop(i.guild_id, i.user.id)
             return await reply(i, 'Pokéstop rewards', self.stop_rewards(items, dust))
         if action == 'Catch':
             spawn = await self.current_encounter(i.guild_id, i.channel_id)
             return await reply(i, 'Choose a ball', 'Throw a ball before this Pokémon flees.',
                                Catch(self, i.user.id, spawn['id']))
-        if action in {'Trainer','PC box','Inventory','Orders','Shop'}:
-            await i.response.defer(ephemeral=True)
+        if action in {'PC box','Inventory','Orders','Shop'}:
+            await i.response.defer(ephemeral=True, thinking=True)
             state = await self.available(i.guild_id)
             player = account(state, i.user.id)
-            if action == 'Trainer':
-                return await reply(i, 'Trainer', f"XP: {player['xp']:,}\nTrainer level: {min(50, 1 + int((player['xp']/1000)**.5))}\nStardust: {player['dust']:,}\nPokémon: {len(player['box'])}\nParty: {', '.join(player['party']) or 'Empty'}\nFamily Candy: {player['candy']}")
             if action == 'PC box':
                 view = Box(self, i.user.id, list(player['box'].values()))
                 return await i.followup.send(embed=view.render(), view=view, ephemeral=True)
@@ -628,12 +735,16 @@ class Pokemon(commands.Cog):
         await reply(i, 'Spawn notifications updated', f'New encounters will ping <@&{role.id}>.' if role else 'Spawn role pings are disabled.')
 
     async def admin_route(self, i, action):
+        if action == 'View PC box':
+            async def lookup(current, text):
+                await self.show_member_box(current, self.resolve_member(current.guild, text))
+            return await i.response.send_modal(Input(self, 'View member PC box', [('Member', 'Discord ID, mention, or exact nickname')], lookup))
         if action == 'Spawn channel':
             view = View(self, i.user.id)
             view.add_item(ChannelChoice())
             return await reply(i, 'Spawn channel', 'Choose the channel where wild Pokémon should appear.', view)
         if action in {'Settings', 'Enable / disable', 'Orders'}:
-            await i.response.defer(ephemeral=True)
+            await i.response.defer(ephemeral=True, thinking=True)
             async with self.lock(i.guild_id):
                 state = await self.state(i.guild_id)
                 if action == 'Enable / disable':
@@ -645,7 +756,8 @@ class Pokemon(commands.Cog):
                 if action == 'Orders':
                     rows = [f"`{key}` · {o['status']} · {o.get('kind', 'shop')}" for key,o in state['orders'].items() if o['status'] not in {'complete','failed','cancelled'}]
                     return await reply(i, 'Orders requiring review', '\n'.join(rows[-30:]) or 'None. Bank-uncertain records must be reconciled against the bank by the bot owner.')
-                return await reply(i, 'Pokémon settings', f"Enabled: {state['enabled']}\nChannel: {state['channel']}\nInterval: {state['interval']//60} minutes\nEncounter duration: 5 minutes\nNotification role: {state['notify_role'] or 'Disabled'}\nRole bonuses: {state['roles']}\nRoles use the highest bonus for each category; bonuses do not stack.")
+                return await reply(i, 'Pokémon settings', f"Enabled: {state['enabled']}\nChannel: {state['channel']}\nInterval: {state['interval']//60} minutes\nEncounter duration: 5 minutes\nNotification role: {state['notify_role'] or 'Disabled'}\nRole bonuses: {state['roles']}\nRoles use the highest bonus for each category; bonuses do not stack.",
+                    view=Menu(self, i.user.id, admin=True) if action == 'Settings' else None)
         fields = {
             'Notification role': [('Role ID', 'Enter a role ID or role mention; 0 disables pings')],
             'Interval': [('Minutes', 'Default 30; minimum 1; maximum 1440')],

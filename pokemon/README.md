@@ -20,6 +20,14 @@ First use downloads official [PokéAPI CSV tables](https://github.com/PokeAPI/po
 - `[p]pokecatch` (alias `[p]catch`) in the configured spawn channel opens ball selection for the current encounter. The spawn button and **Catch** menu action use the same capture rules. The first successful player catches it; failed attempts do not extend its five-minute window.
 - A caught encounter changes to a capture notice and loses its catch button. Expired menus cannot consume balls or grant a late capture, even if Discord cannot edit the public message.
 
+## Trainer cards and staff PC viewing
+
+Use `[p]trainer` (alias `[p]trainercard`) or **Trainer** in the Pokémon menu to see your game-style trainer card. It includes your current Discord nickname and avatar, live Red bank balance and currency name, unique owned species count, total Pokémon, trainer level, XP, and Stardust. Duplicates, shinies, and alternate forms of the same species count once in the Pokédex; transferring away the last Pokémon of a species reduces the count.
+
+Use **View another trainer** on a card, or **Other trainer** in the Pokémon menu, to enter a member ID, mention, or exact nickname in a modal. Trainer cards are visible to other members. Names shared by multiple members require an ID or mention. Viewing a card does not create or change the target's collection.
+
+Staff use `[p]pokebox` → **View member PC box**, or administrators use `[p]pokeset` → **View PC box**, to enter a member in a modal. The target's box opens privately with their nickname, Pokémon IDs, levels, shininess, and pagination. Only the staff member who opened it may interact; staff permissions are checked again on each page. Inspection is read-only and remains available while the game is disabled. Server administrators, configured Red admins/moderators, or members with Manage Server/Manage Messages may use the inspection interface; the standalone command follows Red's moderator or Manage Server command check.
+
 ## Collection rules
 
 - No geographic restrictions. Legendary, Mythical, and all stages of pseudo-legendary families are excluded from wild selection. Administrators can grant these Pokémon; raids will provide their normal acquisition path later.
@@ -72,7 +80,7 @@ Implemented: stat calculations, nature modifiers, IVs, capped EV yields on knock
 
 ## Administration and privacy
 
-`[p]pokeset` provides give/take Pokémon, give/take items, force evolution, role bonuses, interval settings, and confirmed PC box wipes. Settings callbacks check permissions again; private menus reject other users. `[p]pokeorders` is bot-owner only.
+`[p]pokeset` provides give/take Pokémon, give/take items, force evolution, role bonuses, interval settings, and confirmed PC box wipes. **Settings** shows the saved configuration and action buttons; **Enable / disable** saves and confirms the new state; **Orders** lists unresolved payment records (or explicitly reports none). Settings callbacks check permissions again; private menus reject other users. `[p]pokeorders` is bot-owner only.
 
 Collections and resources are per server. Red user deletion removes a user's stored collection, orders, trade proposals, and encounter attempts, and cancels active battles. Public Discord messages are not deleted by this hook. Unresolved bank exchanges should be reviewed before voluntarily deleting account records, because deletion removes the associated journal.
 
