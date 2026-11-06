@@ -106,8 +106,24 @@ def dex():
 
 class Value:
     def __init__(self, value): self.value=copy.deepcopy(value)
-    async def __call__(self): return copy.deepcopy(self.value)
+    async def __call__(self, default=...): return copy.deepcopy(self.value)
     async def set(self, value): self.value=copy.deepcopy(value)
+
+
+class RedMergeValue(Value):
+    """Reproduce Red Group's recursive default merge, including dict-vs-None."""
+    @classmethod
+    def merge(cls, current, defaults):
+        for key, value in current.items():
+            if isinstance(value, dict):
+                defaults[key] = cls.merge(value, defaults.get(key, {}))
+            else:
+                defaults[key] = copy.deepcopy(value)
+        return defaults
+
+    async def __call__(self, default=...):
+        defaults = game.default_state() if default is ... else copy.deepcopy(default)
+        return self.merge(copy.deepcopy(self.value), defaults)
 
 
 class RulesTests(unittest.TestCase):
@@ -646,6 +662,41 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         record=self.cog.last_errors[1]
         self.assertIn(record['reference'],self.i.followup.send.call_args.kwargs['embed'].description)
         self.assertIn('TypeError: test error',record['traceback'])
+
+    async def test_active_encounter_red_merge_regression_preserves_all_data(self):
+        s=state(); s['next_spawn']=1900
+        s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        rules.account(s,1)['box']['abc']=pokemon()
+        s['orders']['receipt']={'user':1,'kind':'shop','status':'complete'}
+        self.value=RedMergeValue(s)
+        # This is the exact old read path from the user's traceback.
+        with self.assertRaises(TypeError): await self.value()
+        loaded=await self.cog.state(1)
+        self.assertEqual(loaded['spawn'],s['spawn'])
+        self.assertEqual(loaded['players'],s['players'])
+        self.assertEqual(loaded['orders'],s['orders'])
+        await self.cog.admin_route(self.i,'Settings')
+        self.assertEqual(self.i.followup.send.call_args.kwargs['embed'].title,'Pokémon settings')
+        # Clear and re-create an encounter, checking both representations read safely.
+        loaded['spawn']=None
+        await self.cog.save(1,loaded)
+        self.assertIsNone((await self.cog.state(1))['spawn'])
+        loaded['spawn']=s['spawn']
+        await self.cog.save(1,loaded)
+        self.assertEqual((await self.cog.state(1))['spawn']['id'],'s')
+
+    async def test_red_merge_regression_scheduler_can_expire_and_spawn_again(self):
+        s=state(); s['interval']=300; s['next_spawn']=400
+        s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        self.value=RedMergeValue(s)
+        self.cog.schedule_expiry=Mock()
+        self.cog.dex.load=AsyncMock()
+        self.cog.spawn=AsyncMock()
+        with patch.object(game.time,'time',return_value=400):
+            await game.Pokemon.scheduler.fn(self.cog)
+        self.assertIsNone((await self.cog.state(1))['spawn'])
+        self.cog.spawn.assert_awaited_once_with(1)
+        self.assertEqual(self.cog.last_errors,{})
 
     async def test_delete_removes_inventory_orders_and_attempts(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()

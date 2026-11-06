@@ -352,7 +352,10 @@ class Pokemon(commands.Cog):
         return self.bank_locks.setdefault(uid, asyncio.Lock())
 
     async def state(self, gid):
-        state = await self.config.guild_from_id(gid).state()
+        # Explicitly override Red's registered recursive defaults. A stored encounter
+        # is a dict while its registered default is None; Red cannot merge those.
+        # Apply our missing-key defaults below instead, preserving existing data.
+        state = await self.config.guild_from_id(gid).state(default={})
         if not isinstance(state, dict):
             raise ValueError('Saved Pokémon settings are not a dictionary; owner review is required.')
         for key, value in default_state().items():
