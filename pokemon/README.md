@@ -89,3 +89,10 @@ Collections and resources are per server. Red user deletion removes a user's sto
 `python -m unittest discover -s pokemon/tests -v`
 
 Tests use lightweight Discord/Red/bank doubles so they run without a bot token. They cover Pokéstop rewards and saved cooldowns, five-minute expiry, notification roles, catch races, single-charge purchases, uncertain payment recovery, trade validation/payment failures, component limits, stat rules, reserved wild species, and data deletion. Syntax checks and a live official-data import were also run. Live Discord and the actual Paimon bank integration still require a test-server check.
+
+
+## Troubleshooting settings and spawning
+
+**Settings** reports whether spawning is enabled, the resolved channel, whether the bot can post embeds, the configured interval, the next scheduled spawn, and scheduler health. The scheduler checks every 30 seconds, so a five-minute interval can appear up to 30 seconds later. A channel must be configured and spawning explicitly enabled. Older saved settings gain missing defaults without clearing trainer collections. Reloading preserves the next scheduled time.
+
+A bad server record during scheduler startup is logged and isolated so other servers continue spawning. Interaction failures now show an error type and reference. The bot owner can run `[p]pokediagnose` and click **Show private diagnostic report** to see scheduler health and the most recent captured traceback for this server. Reports are private to the owner; records remain in memory until the cog reloads. Reproduce the failure after loading this version, then open the report before reloading again.

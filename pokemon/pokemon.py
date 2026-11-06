@@ -6,6 +6,7 @@ import logging
 import random
 import time
 import uuid
+import traceback
 
 import discord
 from discord.ext import tasks
@@ -20,6 +21,12 @@ log = logging.getLogger('red.pokemon')
 ENCOUNTER_SECONDS = 300
 
 
+def default_state():
+    return {'enabled': False, 'channel': None, 'interval': 1800, 'next_spawn': 0,
+            'spawn': None, 'pending_spawn_edits': {}, 'notify_role': None,
+            'roles': {}, 'players': {}, 'trades': {}, 'orders': {}}
+
+
 def embed(title, text):
     return discord.Embed(title=title, description=str(text)[:4000], color=0xEF5350)
 
@@ -28,7 +35,12 @@ async def reply(i, title, text, view=None):
     kwargs = dict(embed=embed(title, text), ephemeral=True,
                   allowed_mentions=discord.AllowedMentions.none())
     if view is not None: kwargs["view"] = view
-    if i.response.is_done(): await i.followup.send(**kwargs)
+    if i.response.is_done():
+        if i.response.type == discord.InteractionResponseType.deferred_channel_message:
+            kwargs.pop('ephemeral')
+            await i.edit_original_response(**kwargs)
+        else:
+            await i.followup.send(**kwargs)
     else: await i.response.send_message(**kwargs)
 
 
@@ -100,8 +112,8 @@ class View(discord.ui.View):
         self.cog.views.discard(self)
 
     async def on_error(self, i, error, item):
-        log.error('Pokémon interaction failed', exc_info=(type(error), error, error.__traceback__))
-        await reply(i, 'Unable to complete', 'The request failed. Check your collection or order status before retrying.')
+        reference = self.cog.record_error(i.guild_id, 'interaction', error)
+        await reply(i, 'Unable to complete', f'This action failed ({type(error).__name__}). Error reference: `{reference}`. The bot owner can use pokediagnose to inspect it.')
 
 
 class Input(discord.ui.Modal):
@@ -312,12 +324,12 @@ class Pokemon(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420021, force_registration=True)
-        self.config.register_guild(state={'enabled': False, 'channel': None, 'interval': 1800,
-            'next_spawn': 0, 'spawn': None, 'pending_spawn_edits': {}, 'notify_role': None, 'roles': {}, 'players': {}, 'trades': {}, 'orders': {}})
+        self.config.register_guild(state=default_state())
         self.dex = Dex(cog_data_path(self) / 'dex')
         self.locks, self.bank_locks, self.views = {}, {}, set()
         self.active_battles = {}
         self.expiry_tasks = {}
+        self.last_errors = {}
 
     async def cog_load(self):
         self.spawn_view = Spawn(self)
@@ -341,8 +353,18 @@ class Pokemon(commands.Cog):
 
     async def state(self, gid):
         state = await self.config.guild_from_id(gid).state()
-        state.setdefault('notify_role', None)
-        state.setdefault('pending_spawn_edits', {})
+        if not isinstance(state, dict):
+            raise ValueError('Saved Pokémon settings are not a dictionary; owner review is required.')
+        for key, value in default_state().items():
+            state.setdefault(key, value)
+        try:
+            state['interval'] = max(300, min(86400, int(state['interval'])))
+            state['next_spawn'] = float(state['next_spawn'])
+            if not math.isfinite(state['next_spawn']): raise ValueError('Spawn time must be finite.')
+            if state['channel'] is not None: state['channel'] = int(state['channel'])
+            if state['notify_role'] is not None: state['notify_role'] = int(state['notify_role'])
+        except (TypeError, ValueError) as error:
+            raise ValueError('Saved spawn timing or channel/role ID is invalid; owner review is required.') from error
         # Bound old encounters, whose expiry was tied to the spawn interval.
         spawn = state.get('spawn')
         if spawn:
@@ -352,6 +374,34 @@ class Pokemon(commands.Cog):
 
     async def save(self, gid, state):
         await self.config.guild_from_id(gid).state.set(state)
+
+    def record_error(self, gid, source, error):
+        reference = uuid.uuid4().hex[:8]
+        self.last_errors[gid] = {'reference': reference, 'source': source,
+            'type': type(error).__name__, 'message': str(error),
+            'traceback': ''.join(traceback.format_exception(type(error), error, error.__traceback__))}
+        log.error('Pokémon %s failed in guild %s [%s]', source, gid, reference,
+                  exc_info=(type(error), error, error.__traceback__))
+        return reference
+
+    @commands.guild_only()
+    @commands.is_owner()
+    @commands.command(name='pokediagnose')
+    async def pokediagnose(self, ctx):
+        """Owner: privately inspect scheduler health and the latest recorded error."""
+        view = View(self, ctx.author.id)
+        button = discord.ui.Button(label='Show private diagnostic report', style=discord.ButtonStyle.secondary)
+        async def report(i):
+            if not await self.bot.is_owner(i.user): return
+            await i.response.defer(ephemeral=True, thinking=True)
+            error = self.last_errors.get(i.guild_id)
+            details = (f"Reference: {error['reference']}\nSource: {error['source']}\n"
+                       f"{error['traceback']}") if error else 'No recorded errors since this cog was loaded.'
+            await reply(i, 'Pokémon diagnostics',
+                f'Scheduler running: {self.scheduler.is_running()}\nScheduler failed: {self.scheduler.failed()}\n\n{details}')
+        button.callback = report
+        view.add_item(button)
+        await ctx.send(embed=embed('Pokémon diagnostics', 'Use the button to open the owner-only report.'), view=view)
 
     async def admin(self, i):
         if self.bot.get_cog('Pokemon') is not self:
@@ -540,15 +590,18 @@ class Pokemon(commands.Cog):
                 await self.spawn(gid)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                log.exception('Pokémon spawn failed for guild %s', gid)
+            except Exception as error:
+                self.record_error(gid, 'scheduler', error)
 
     @scheduler.before_loop
     async def before_scheduler(self):
         await self.bot.wait_until_red_ready()
         for gid in await self.config.all_guilds():
-            state = await self.state(gid)
-            if state['spawn']: self.schedule_expiry(gid, state['spawn'])
+            try:
+                state = await self.state(gid)
+                if state['spawn']: self.schedule_expiry(gid, state['spawn'])
+            except Exception as error:
+                self.record_error(gid, 'scheduler startup', error)
 
     def schedule_expiry(self, gid, spawn):
         existing = self.expiry_tasks.get(gid)
@@ -840,8 +893,15 @@ class Pokemon(commands.Cog):
                     await self.save(i.guild_id, state)
                 if action == 'Orders':
                     rows = [f"`{key}` · {o['status']} · {o.get('kind', 'shop')}" for key,o in state['orders'].items() if o['status'] not in {'complete','failed','cancelled'}]
-                    return await reply(i, 'Orders requiring review', '\n'.join(rows[-30:]) or 'None. Bank-uncertain records must be reconciled against the bank by the bot owner.')
-                return await reply(i, 'Pokémon settings', f"Enabled: {state['enabled']}\nChannel: {state['channel']}\nInterval: {state['interval']//60} minutes\nEncounter duration: 5 minutes\nNotification role: {state['notify_role'] or 'Disabled'}\nRole bonuses: {state['roles']}\nRoles use the highest bonus for each category; bonuses do not stack.",
+                    return await reply(i, 'Orders requiring review', '\n'.join(rows[-30:]) or 'No orders need review.')
+                channel = i.guild.get_channel(state['channel']) if state['channel'] else None
+                next_spawn = f"<t:{int(state['next_spawn'])}:R>" if state['enabled'] and state['channel'] else 'Not scheduled'
+                health = 'Running' if self.scheduler.is_running() else 'Stopped — reload the Pokémon cog'
+                last_error = self.last_errors.get(i.guild_id)
+                if last_error: health += f" · Last error: {last_error['type']} ({last_error['reference']})"
+                permissions = channel.permissions_for(i.guild.me) if channel else None
+                can_post = bool(permissions and permissions.view_channel and permissions.send_messages and permissions.embed_links)
+                return await reply(i, 'Pokémon settings', f"Enabled: {state['enabled']}\nChannel: {f'<#{channel.id}>' if channel else 'Not configured or unavailable'}\nCan post embeds: {can_post}\nInterval: {state['interval']//60} minutes\nNext spawn: {next_spawn}\nScheduler: {health}\nEncounter duration: 5 minutes\nNotification role: {state['notify_role'] or 'Disabled'}\nRole bonuses: {state['roles']}\nRoles use the highest bonus for each category; bonuses do not stack.",
                     view=Menu(self, i.user.id, admin=True) if action == 'Settings' else None)
         fields = {
             'Notification role': [('Role ID', 'Enter a role ID or role mention; 0 disables pings')],

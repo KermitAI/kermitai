@@ -26,6 +26,8 @@ class Loop:
     def before_loop(self, fn): return fn
     def start(self): pass
     def cancel(self): pass
+    def is_running(self): return True
+    def failed(self): return False
 
 
 class View:
@@ -62,6 +64,7 @@ modules = {
         Select=Component, TextInput=Component, ChannelSelect=Component, RoleSelect=Component), SelectOption=Component,
         Embed=Embed, utils=types.SimpleNamespace(escape_markdown=lambda text:text), ButtonStyle=types.SimpleNamespace(danger=1, success=2, secondary=3),
         ChannelType=types.SimpleNamespace(text=0), Status=types.SimpleNamespace(offline='offline'),
+        InteractionResponseType=types.SimpleNamespace(deferred_channel_message=5),
         HTTPException=type('HTTPException',(Exception,),{}),
         NotFound=type('NotFound',(Exception,),{}),
         AllowedMentions=type('AllowedMentions',(Component,),{'none':staticmethod(lambda:None)})),
@@ -174,7 +177,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.value=Value(state())
         self.cog.config=types.SimpleNamespace(guild_from_id=lambda gid:types.SimpleNamespace(state=self.value),
                                            all_guilds=AsyncMock(return_value={1:{}}))
-        self.cog.locks={}; self.cog.bank_locks={}; self.cog.active_battles={}; self.cog.views=set(); self.cog.expiry_tasks={}
+        self.cog.locks={}; self.cog.bank_locks={}; self.cog.active_battles={}; self.cog.views=set(); self.cog.expiry_tasks={}; self.cog.last_errors={}
         self.cog.dex=dex()
         self.user=types.SimpleNamespace(id=1,roles=[],display_name='Trainer One',name='one',display_avatar=types.SimpleNamespace(url='https://example.com/one.png'),guild_permissions=types.SimpleNamespace(administrator=False,manage_guild=False,manage_messages=False))
         self.other=types.SimpleNamespace(id=2,roles=[],display_name='Trainer Two',name='two',display_avatar=types.SimpleNamespace(url='https://example.com/two.png'))
@@ -184,7 +187,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.cog.bot=types.SimpleNamespace(get_cog=lambda n:self.cog,get_guild=lambda gid:self.guild,
             cog_disabled_in_guild=AsyncMock(return_value=False),is_owner=AsyncMock(return_value=True))
         self.i=types.SimpleNamespace(guild_id=1,guild=self.guild,user=self.user,
-            response=types.SimpleNamespace(is_done=lambda:True,defer=AsyncMock(),send_modal=AsyncMock()),followup=types.SimpleNamespace(send=AsyncMock()))
+            response=types.SimpleNamespace(type=6,is_done=lambda:True,defer=AsyncMock(),send_modal=AsyncMock()),followup=types.SimpleNamespace(send=AsyncMock()))
         bank.is_global=AsyncMock(return_value=False)
         bank.withdraw_credits=AsyncMock(); bank.deposit_credits=AsyncMock()
         bank.get_currency_name=AsyncMock(return_value='Coins')
@@ -595,6 +598,54 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored['pending_spawn_edits'],{})
         self.assertEqual(stored['spawn']['id'],'new')
         self.assertEqual(self.cog.edit_encounter.call_args.args[1]['message'],10)
+
+    async def test_settings_recovers_missing_defaults_and_string_interval(self):
+        await self.value.set({'enabled':True,'channel':'5','interval':'300','next_spawn':'1300'})
+        await self.cog.admin_route(self.i,'Settings')
+        sent=self.i.followup.send.call_args.kwargs
+        self.assertIn('Interval: 5 minutes',sent['embed'].description)
+        self.assertIn('Next spawn: <t:1300:R>',sent['embed'].description)
+        self.assertIn('Scheduler: Running',sent['embed'].description)
+
+    async def test_deferred_settings_edits_original_response_without_followup(self):
+        self.i.response.type=5
+        self.i.edit_original_response=AsyncMock()
+        await self.cog.admin_route(self.i,'Settings')
+        self.i.edit_original_response.assert_awaited_once()
+        self.i.followup.send.assert_not_awaited()
+        kwargs=self.i.edit_original_response.call_args.kwargs
+        self.assertNotIn('ephemeral',kwargs)
+        self.assertIsInstance(kwargs['view'],game.Menu)
+
+    async def test_scheduler_spawns_when_five_minute_deadline_is_due(self):
+        s=state(); s['interval']=300; s['next_spawn']=1300
+        await self.value.set(s)
+        self.cog.dex.load=AsyncMock()
+        self.cog.spawn=AsyncMock()
+        with patch.object(game.time,'time',return_value=1299):
+            await game.Pokemon.scheduler.fn(self.cog)
+        self.cog.spawn.assert_not_awaited()
+        with patch.object(game.time,'time',return_value=1300):
+            await game.Pokemon.scheduler.fn(self.cog)
+        self.cog.spawn.assert_awaited_once_with(1)
+
+    async def test_bad_guild_does_not_stop_scheduler_startup(self):
+        self.cog.bot.wait_until_red_ready=AsyncMock()
+        self.cog.config.all_guilds=AsyncMock(return_value={1:{},2:{}})
+        good=state(); good['spawn']={'id':'s','expires':1300}
+        self.cog.state=AsyncMock(side_effect=[ValueError('invalid stored interval'),good])
+        self.cog.schedule_expiry=Mock()
+        with self.assertLogs('red.pokemon',level='ERROR'):
+            await self.cog.before_scheduler()
+        self.cog.schedule_expiry.assert_called_once_with(2,good['spawn'])
+        self.assertEqual(self.cog.last_errors[1]['source'],'scheduler startup')
+
+    async def test_interaction_error_gets_visible_reference_and_private_trace(self):
+        with self.assertLogs('red.pokemon',level='ERROR'):
+            await game.View(self.cog).on_error(self.i,TypeError('test error'),None)
+        record=self.cog.last_errors[1]
+        self.assertIn(record['reference'],self.i.followup.send.call_args.kwargs['embed'].description)
+        self.assertIn('TypeError: test error',record['traceback'])
 
     async def test_delete_removes_inventory_orders_and_attempts(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()
