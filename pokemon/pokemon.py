@@ -14,11 +14,13 @@ from redbot.core import Config, bank, commands
 from redbot.core.data_manager import cog_data_path
 
 from .dex import Dex
+from .storage import GlobalStore
 from .rules import (ITEMS, BALLS, account, bonus, choose_species, new_pokemon,
-                    catch_chance, stats, hidden_power, remove_pokemon, transfer, swap, spin_pokestop)
+                    catch_chance, stats, hidden_power, remove_pokemon, transfer, swap, spin_pokestop, record_catch)
 
 log = logging.getLogger('red.pokemon')
-ENCOUNTER_SECONDS = 300
+ENCOUNTER_SECONDS = 120
+OWNER_ACTIONS = {"Interval", "Give Pokémon", "Take Pokémon", "Give / take items", "Force evolve", "Wipe box", "Orders"}
 
 
 def default_state():
@@ -224,13 +226,14 @@ class ChannelChoice(discord.ui.ChannelSelect):
 
 
 class Menu(View):
-    def __init__(self, cog, owner, admin=False):
+    def __init__(self, cog, owner, admin=False, owner_controls=True):
         super().__init__(cog, owner)
         self.admin_menu = admin
         if admin:
             actions = ['Settings', 'Enable / disable', 'Spawn channel', 'Interval',
                        'Notification role', 'Role bonuses', 'View PC box', 'Give Pokémon', 'Take Pokémon',
                        'Give / take items', 'Force evolve', 'Wipe box', 'Orders']
+            if not owner_controls: actions = [action for action in actions if action not in OWNER_ACTIONS]
             for index, action in enumerate(actions):
                 button = discord.ui.Button(label=action, row=index // 4,
                     style=discord.ButtonStyle.danger if action == 'Wipe box' else discord.ButtonStyle.secondary)
@@ -244,7 +247,7 @@ class Menu(View):
                 self.add_item(button)
             return
         actions = [
-            ('Trainer', '🪪'), ('Other trainer', '👥'), ('PC box', '🗃️'),
+            ('Trainer', '🪪'), ('Other trainer', '👥'), ('Pokédex', '📖'), ('PC box', '🗃️'),
             ('Inspect', '🔎'), ('Party', '⭐'), ('Transfer', '📤'),
             ('Power up', '⬆️'), ('Evolve', '✨'), ('Inventory', '🎒'),
             ('Shop', '🛒'), ('Pokéstop', '📍'), ('Catch', '🔴'),
@@ -252,7 +255,7 @@ class Menu(View):
         ]
         for index, (action, icon) in enumerate(actions):
             style = discord.ButtonStyle.success if action in {'Catch', 'Pokéstop'} else discord.ButtonStyle.secondary
-            button = discord.ui.Button(label=action, emoji=icon, style=style, row=index // 3)
+            button = discord.ui.Button(label=action, emoji=icon, style=style, row=index // 4)
             async def choose(i, action=action):
                 try:
                     await cog.route(i, action)
@@ -260,6 +263,30 @@ class Menu(View):
                     await reply(i, 'Unable to complete', str(error))
             button.callback = choose
             self.add_item(button)
+
+
+class Pokedex(View):
+    def __init__(self, cog, owner, entries):
+        super().__init__(cog, owner)
+        self.entries = sorted(entries.items(), key=lambda entry: int(entry[0]))
+        self.page = 0
+        for label, delta in [('Previous', -1), ('Next', 1)]:
+            button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
+            async def turn(i, delta=delta):
+                self.page = max(0, min(max(0, (len(self.entries)-1)//15), self.page+delta))
+                await i.response.edit_message(embed=self.render())
+            button.callback = turn
+            self.add_item(button)
+
+    def render(self):
+        pages = max(1, (len(self.entries)+14)//15)
+        lines = [f"**#{int(sid):04d} · {entry['name'].replace('-', ' ').title()}** · Caught {entry['caught']:,}" +
+                 (' · ✨ Shiny caught' if entry['shiny'] else '')
+                 for sid, entry in self.entries[self.page*15:self.page*15+15]]
+        card = embed('📖 Pokédex', f'**{len(self.entries):,} unique species caught**\n\n' +
+                     ('\n'.join(lines) or 'Your Pokédex is empty. Catch a wild Pokémon to begin!'))
+        card.set_footer(text=f'Page {self.page+1}/{pages} • Entries stay recorded after transfers or trades.')
+        return card
 
 
 class Box(View):
@@ -325,6 +352,8 @@ class Pokemon(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420021, force_registration=True)
         self.config.register_guild(state=default_state())
+        self.config.register_global(world={})
+        self.storage = GlobalStore(self.config)
         self.dex = Dex(cog_data_path(self) / 'dex')
         self.locks, self.bank_locks, self.views = {}, {}, set()
         self.active_battles = {}
@@ -332,6 +361,7 @@ class Pokemon(commands.Cog):
         self.last_errors = {}
 
     async def cog_load(self):
+        await self.storage.world()
         self.spawn_view = Spawn(self)
         self.bot.add_view(self.spawn_view)
         self.scheduler.start()
@@ -346,16 +376,14 @@ class Pokemon(commands.Cog):
         self.views.clear()
 
     def lock(self, gid):
-        return self.locks.setdefault(gid, asyncio.Lock())
+        return self.locks.setdefault("global", asyncio.Lock())
 
     def bank_lock(self, uid):
         return self.bank_locks.setdefault(uid, asyncio.Lock())
 
     async def state(self, gid):
-        # Explicitly override Red's registered recursive defaults. A stored encounter
-        # is a dict while its registered default is None; Red cannot merge those.
-        # Apply our missing-key defaults below instead, preserving existing data.
-        state = await self.config.guild_from_id(gid).state(default={})
+        # Compose local encounter/settings with shared trainer data from one global snapshot.
+        state = await self.storage.read(gid)
         if not isinstance(state, dict):
             raise ValueError('Saved Pokémon settings are not a dictionary; owner review is required.')
         for key, value in default_state().items():
@@ -376,7 +404,7 @@ class Pokemon(commands.Cog):
         return state
 
     async def save(self, gid, state):
-        await self.config.guild_from_id(gid).state.set(state)
+        await self.storage.save(gid, state)
 
     def record_error(self, gid, source, error):
         reference = uuid.uuid4().hex[:8]
@@ -501,6 +529,24 @@ class Pokemon(commands.Cog):
         if load_dex and not self.dex.species: await self.dex.load()
         return state
 
+    async def pokedex_view(self, gid, uid):
+        async with self.lock(gid):
+            state = await self.available(gid, load_dex=False)
+            player = account(state, uid)
+            await self.save(gid, state)
+            return Pokedex(self, uid, copy.deepcopy(player['pokedex']))
+
+    @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    @commands.command(name='pokedex')
+    async def pokedex(self, ctx):
+        """Browse your recorded catches, sorted by Pokédex number."""
+        try:
+            view = await self.pokedex_view(ctx.guild.id, ctx.author.id)
+        except ValueError as error:
+            return await ctx.send(embed=embed('Pokédex unavailable', str(error)))
+        await ctx.send(embed=view.render(), view=view, allowed_mentions=discord.AllowedMentions.none())
+
     @commands.guild_only()
     @commands.bot_has_permissions(embed_links=True)
     @commands.command(name='pokemon', aliases=['poke'])
@@ -574,12 +620,12 @@ class Pokemon(commands.Cog):
     @commands.command(name='pokeset')
     async def pokeset(self, ctx):
         """Open Pokémon server settings and moderation tools."""
-        await ctx.send(embed=embed('Pokémon settings', 'Use the buttons to configure this server. Choose Spawn channel, then explicitly enable spawning. Default interval: 30 minutes.'),
-                       view=Menu(self, ctx.author.id, admin=True))
+        await ctx.send(embed=embed('Pokémon settings', 'Use the buttons to configure this server. Choose Spawn channel, then explicitly enable spawning. The spawn interval is global and can only be changed by the bot owner.'),
+                       view=Menu(self, ctx.author.id, admin=True, owner_controls=await self.bot.is_owner(ctx.author)))
 
     @tasks.loop(seconds=30)
     async def scheduler(self):
-        for gid in await self.config.all_guilds():
+        for gid in await self.storage.guild_ids():
             try:
                 state = await self.state(gid)
                 if not self.bot.get_guild(gid): continue
@@ -599,7 +645,7 @@ class Pokemon(commands.Cog):
     @scheduler.before_loop
     async def before_scheduler(self):
         await self.bot.wait_until_red_ready()
-        for gid in await self.config.all_guilds():
+        for gid in await self.storage.guild_ids():
             try:
                 state = await self.state(gid)
                 if state['spawn']: self.schedule_expiry(gid, state['spawn'])
@@ -658,7 +704,7 @@ class Pokemon(commands.Cog):
             state['spawn'] = None
             state['pending_spawn_edits'][spawn_id] = {
                 'spawn': copy.deepcopy(spawn), 'title': 'The wild Pokémon fled!',
-                'text': f"**{spawn['pokemon']['name'].replace('-', ' ').title()}** fled! The five-minute encounter has ended.",
+                'text': f"**{spawn['pokemon']['name'].replace('-', ' ').title()}** fled! The two-minute encounter has ended.",
             }
             # Save the edit alongside expiry so a disconnect/reload cannot lose it.
             await self.save(gid, state)
@@ -691,7 +737,7 @@ class Pokemon(commands.Cog):
                 role.mentionable or channel.permissions_for(guild.me).mention_everyone)
             message = await channel.send(content=f'<@&{role.id}>' if can_ping else None,
                 embed=encounter_embed(pokemon, 'A wild Pokémon appeared!',
-                f"**{species['name'].replace('-', ' ').title()}** · Level {pokemon['level']}\nUse the Catch button or the pokecatch command to throw a ball. Fleeing <t:{int(now + ENCOUNTER_SECONDS)}:R> (five minutes)."),
+                f"**{species['name'].replace('-', ' ').title()}** · Level {pokemon['level']}\nUse the Catch button or the pokecatch command to throw a ball. Fleeing <t:{int(now + ENCOUNTER_SECONDS)}:R> (two minutes)."),
                 view=self.spawn_view,
                 allowed_mentions=discord.AllowedMentions(everyone=False, users=False,
                                                         roles=[role] if can_ping else [], replied_user=False))
@@ -725,6 +771,7 @@ class Pokemon(commands.Cog):
                 return 'The Pokémon broke free! Your ball was used. You can try again in five seconds.'
             pokemon['shiny'] = random.random() < min(1, perks['shiny']/4096)
             player['box'][pokemon['id']] = pokemon
+            record_catch(player, pokemon)
             xp, candy = int(100*perks['xp']), (3+int(perks['candy']))*(2 if berry == 'pinap-berry' else 1)
             player['xp'] += xp
             player['dust'] += 100
@@ -748,6 +795,11 @@ class Pokemon(commands.Cog):
     async def route(self, i, action, admin=False):
         if admin:
             return await self.admin_route(i, action)
+        if action == 'Pokédex':
+            await i.response.defer(ephemeral=True, thinking=True)
+            view = await self.pokedex_view(i.guild_id, i.user.id)
+            return await i.edit_original_response(embed=view.render(), view=view,
+                                                  allowed_mentions=discord.AllowedMentions.none())
         if action == 'Trainer':
             return await self.show_trainer(i, i.user)
         if action == 'Other trainer':
@@ -789,7 +841,7 @@ class Pokemon(commands.Cog):
         await i.response.send_modal(Input(self, action, fields[action], submit))
 
     async def orders(self, i, state):
-        rows = [f"`{key}` · {o['status']} · {o.get('price', o.get('currency', 0)):,}" for key,o in state['orders'].items()
+        rows = [f"`{key}` · {o['status']} · {o.get('price', o.get('currency', 0)):,} · server {o.get('guild_id', 'legacy')}" for key,o in state['orders'].items()
                 if o.get('user') == i.user.id or i.user.id in o.get('users', [])]
         await reply(i, 'Recent orders', '\n'.join(rows[-25:]) or 'No orders. Uncertain orders require bot owner review; they never charge automatically again.')
 
@@ -876,6 +928,8 @@ class Pokemon(commands.Cog):
         await reply(i, 'Spawn notifications updated', f'New encounters will ping <@&{role.id}>.' if role else 'Spawn role pings are disabled.')
 
     async def admin_route(self, i, action):
+        if action in OWNER_ACTIONS and not await self.bot.is_owner(i.user):
+            raise ValueError('Only the bot owner can change global Pokémon settings or manage shared assets.')
         if action == 'View PC box':
             async def lookup(current, text):
                 await self.show_member_box(current, self.resolve_member(current.guild, text))
@@ -895,7 +949,7 @@ class Pokemon(commands.Cog):
                     state['next_spawn'] = time.time() + state['interval']
                     await self.save(i.guild_id, state)
                 if action == 'Orders':
-                    rows = [f"`{key}` · {o['status']} · {o.get('kind', 'shop')}" for key,o in state['orders'].items() if o['status'] not in {'complete','failed','cancelled'}]
+                    rows = [f"`{key}` · {o['status']} · {o.get('kind', 'shop')} · server {o.get('guild_id', 'legacy')}" for key,o in state['orders'].items() if o['status'] not in {'complete','failed','cancelled'}]
                     return await reply(i, 'Orders requiring review', '\n'.join(rows[-30:]) or 'No orders need review.')
                 channel = i.guild.get_channel(state['channel']) if state['channel'] else None
                 next_spawn = f"<t:{int(state['next_spawn'])}:R>" if state['enabled'] and state['channel'] else 'Not scheduled'
@@ -904,8 +958,8 @@ class Pokemon(commands.Cog):
                 if last_error: health += f" · Last error: {last_error['type']} ({last_error['reference']})"
                 permissions = channel.permissions_for(i.guild.me) if channel else None
                 can_post = bool(permissions and permissions.view_channel and permissions.send_messages and permissions.embed_links)
-                return await reply(i, 'Pokémon settings', f"Enabled: {state['enabled']}\nChannel: {f'<#{channel.id}>' if channel else 'Not configured or unavailable'}\nCan post embeds: {can_post}\nInterval: {state['interval']//60} minutes\nNext spawn: {next_spawn}\nScheduler: {health}\nEncounter duration: 5 minutes\nNotification role: {state['notify_role'] or 'Disabled'}\nRole bonuses: {state['roles']}\nRoles use the highest bonus for each category; bonuses do not stack.",
-                    view=Menu(self, i.user.id, admin=True) if action == 'Settings' else None)
+                return await reply(i, 'Pokémon settings', f"Enabled: {state['enabled']}\nChannel: {f'<#{channel.id}>' if channel else 'Not configured or unavailable'}\nCan post embeds: {can_post}\nInterval: {state['interval']//60} minutes (global; bot owner only)\nNext spawn: {next_spawn}\nScheduler: {health}\nEncounter duration: 2 minutes\nNotification role: {state['notify_role'] or 'Disabled'}\nRole bonuses: {state['roles']}\nRoles use the highest bonus for each category; bonuses do not stack.",
+                    view=Menu(self, i.user.id, admin=True, owner_controls=await self.bot.is_owner(i.user)) if action == 'Settings' else None)
         fields = {
             'Notification role': [('Role ID', 'Enter a role ID or role mention; 0 disables pings')],
             'Interval': [('Minutes', 'Default 30; minimum 5; maximum 1440')],
@@ -921,12 +975,15 @@ class Pokemon(commands.Cog):
         await i.response.send_modal(Input(self, action, fields[action], submit))
 
     async def admin_action(self, i, action, *values):
+        if action in OWNER_ACTIONS and not await self.bot.is_owner(i.user):
+            raise ValueError('Only the bot owner can change global Pokémon settings or manage shared assets.')
         if action == 'Notification role':
             return await self.set_notification_role(i, values[0])
         if action == 'Wipe box':
             uid = int(values[0])
             async def wipe(interaction):
-                if not await self.admin(interaction): return
+                if not await self.bot.is_owner(interaction.user):
+                    raise ValueError('Only the bot owner can wipe a global PC box.')
                 async with self.lock(i.guild_id):
                     state = await self.state(i.guild_id)
                     self.ensure_unlocked(state, uid)
@@ -935,7 +992,7 @@ class Pokemon(commands.Cog):
                     player['box'], player['party'] = {}, []
                     await self.save(i.guild_id, state)
                 await reply(interaction, 'Box wiped', f'Removed {count} Pokémon and cleared the party.')
-            return await reply(i, 'Permanently wipe box?', f'This removes every Pokémon belonging to member {uid} in this server.', Confirm(self, i.user.id, wipe, 'Wipe PC box'))
+            return await reply(i, 'Permanently wipe box?', f'This removes every Pokémon belonging to member {uid} from their global collection across all servers.', Confirm(self, i.user.id, wipe, 'Wipe PC box'))
         if action in {'Give Pokémon', 'Force evolve'}: await self.dex.load()
         async with self.lock(i.guild_id):
             state = await self.state(i.guild_id)
@@ -944,7 +1001,6 @@ class Pokemon(commands.Cog):
                 if not 5 <= minutes <= 1440: raise ValueError('Choose 5–1440 minutes.')
                 state['interval'] = minutes*60
                 state['next_spawn'] = time.time() + state['interval']
-                state['spawn'] = None
             elif action == 'Role bonuses':
                 rid = int(values[0])
                 if rid == 0: state['roles'] = {}
@@ -987,7 +1043,7 @@ class Pokemon(commands.Cog):
                 raise ValueError('You have an unresolved purchase. Ask the bot owner to review Orders first.')
             self.ensure_unlocked(state, i.user.id)
             order = {'kind': 'shop', 'user': i.user.id, 'item': item, 'quantity': quantity,
-                     'price': ITEMS[item]*quantity, 'status': 'charging',
+                     'price': ITEMS[item]*quantity, 'status': 'charging', 'guild_id': i.guild_id,
                      'global_bank': await bank.is_global(), 'created': time.time()}
             state['orders'][order_id] = order
             await self.save(i.guild_id, state)
@@ -1035,7 +1091,7 @@ class Pokemon(commands.Cog):
             state['trades'] = {key:t for key,t in state['trades'].items() if t['expires'] > time.time()}
             if sum(t['from'] == i.user.id for t in state['trades'].values()) >= 10: raise ValueError('You already have ten pending proposals.')
             state['trades'][tid] = {'from': i.user.id, 'to': target.id, 'offer': offer,
-                                    'request': request, 'currency': amount, 'expires': time.time()+300}
+                                    'request': request, 'guild_id': i.guild_id, 'currency': amount, 'expires': time.time()+300}
             await self.save(i.guild_id, state)
         description = (f'<@{i.user.id}> offers a trade to <@{target.id}>.\n'
             f'**They give:** Pokémon {offer["pokemon"]}; items {offer["items"]}\n'
@@ -1055,7 +1111,7 @@ class Pokemon(commands.Cog):
         async with self.bank_lock(users[0]), self.bank_lock(users[1]), self.lock(i.guild_id):
             state = await self.available(i.guild_id)
             trade = state['trades'].get(tid)
-            if not trade or trade['to'] != i.user.id or trade['expires'] <= time.time(): raise ValueError('This trade is unavailable or expired.')
+            if not trade or trade.get('guild_id') != i.guild_id or trade['to'] != i.user.id or trade['expires'] <= time.time(): raise ValueError('This trade is unavailable or expired.')
             if not accept:
                 del state['trades'][tid]
                 await self.save(i.guild_id, state)
@@ -1071,7 +1127,7 @@ class Pokemon(commands.Cog):
                 if not sender or not recipient: raise ValueError('Both trainers must still be in the server.')
                 if not await bank.can_spend(sender, abs(amount)): raise ValueError('The payer has insufficient currency.')
                 if await bank.get_balance(recipient)+abs(amount) > await bank.get_max_balance(i.guild): raise ValueError('The recipient’s balance cap would be exceeded.')
-                order = {'kind': 'trade', 'users': users, 'currency': amount, 'trade': copy.deepcopy(trade),
+                order = {'kind': 'trade', 'guild_id': i.guild_id, 'users': users, 'currency': amount, 'trade': copy.deepcopy(trade),
                          'status': 'charging', 'created': time.time(), 'global_bank': await bank.is_global()}
                 state['orders'][tid] = order
                 del state['trades'][tid]
@@ -1135,14 +1191,8 @@ class Pokemon(commands.Cog):
             if user_id in game.players:
                 async with game.guard:
                     await game.finish('A trainer’s data was deleted. Battle cancelled.', save=False)
-        for gid in await self.config.all_guilds():
-            async with self.lock(gid):
-                state = await self.state(gid)
-                state['players'].pop(str(user_id), None)
-                state['trades'] = {k:t for k,t in state['trades'].items() if user_id not in (t['from'],t['to'])}
-                state['orders'] = {k:o for k,o in state['orders'].items() if o.get('user') != user_id and user_id not in o.get('users', [])}
-                if state['spawn']: state['spawn']['attempts'].pop(str(user_id), None)
-                await self.save(gid, state)
+        async with self.lock(0):
+            await self.storage.delete_user(user_id)
 
 
 class Shop(View):

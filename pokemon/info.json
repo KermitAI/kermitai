@@ -4,7 +4,7 @@
   ],
   "name": "Pokemon",
   "short": "Opt-in Pokémon encounters, collections, trading, and friendly battles.",
-  "description": "Component-based Pokémon game with cached PokéAPI data, spawns every 30 minutes with five-minute encounters, optional role notifications, Pokéstop supply rewards, family Candy, Stardust, a Red bank shop, trades, parties, and a basic battle engine. Disabled by default. Raids and complete cartridge move effects are not implemented.",
+  "description": "Global Pokémon collections, progression, Pokédex, inventory, parties, trading, and friendly battles, with opt-in per-server channels and luck roles. Spawn interval and global asset administration are bot-owner only. Cached PokéAPI data, Red bank shop, Pokéstop rewards, and two-minute encounters. Raids and full special move effects remain unfinished.",
   "min_bot_version": "3.5.0",
   "requirements": [
     "aiohttp"
@@ -14,6 +14,6 @@
     "game",
     "economy"
   ],
-  "install_msg": "Use [p]pokeset to choose a spawn channel and explicitly enable Pokémon. Set an optional notification role in that menu. Use [p]pokestop for supplies and [p]pokecatch to catch the current encounter, or open [p]pokemon for the player menu. First use downloads and caches official PokéAPI CSV data; allow several minutes. See pokemon/README.md for rules and battle limitations.",
-  "end_user_data_statement": "Stores per-server trainer IDs, Pokémon, parties, inventory, XP, Candy, Stardust, trade proposals, Pokéstop cooldowns, and shop/trade order journals. Supports Red user deletion requests. Public encounter and trade messages remain in Discord."
+  "install_msg": "Use [p]pokeset to choose a spawn channel and explicitly enable this server. Trainer data merges globally on first load; do not reset existing data. The bot owner controls the global Interval and asset tools. Use [p]pokemon for the player menu. See pokemon/README.md for migration and battle details.",
+  "end_user_data_statement": "Stores global trainer IDs, Pokémon, parties, inventory, Pokédex catch records, XP, Candy, Stardust, trade proposals, Pokéstop cooldowns, and order journals with originating guild IDs. Per-server enablement, channels, role settings, and encounter records remain separate. Legacy server collections are retained as migration backups. Supports deletion of global and legacy user data through Red deletion requests. Public Discord messages remain in Discord."
 }

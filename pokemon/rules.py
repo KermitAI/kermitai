@@ -24,9 +24,21 @@ ITEMS = {**{k: v[0] for k, v in BALLS.items()}, 'potion': 200,
 
 
 def account(state, user_id):
-    return state['players'].setdefault(str(user_id), {
+    player = state['players'].setdefault(str(user_id), {
         'xp': 0, 'dust': 0, 'candy': {}, 'box': {}, 'party': [],
-        'items': {'poke-ball': 20}, 'receipts': [], 'last_pokestop': 0})
+        'items': {'poke-ball': 20}, 'receipts': [], 'last_pokestop': 0, 'pokedex': {}})
+    if 'pokedex' not in player:
+        # Older accounts have no capture history: recover what their box proves.
+        player['pokedex'] = {}
+        for pokemon in player['box'].values(): record_catch(player, pokemon)
+    return player
+
+
+def record_catch(player, pokemon):
+    entry = player['pokedex'].setdefault(str(pokemon['species']),
+        {'name': pokemon['name'], 'caught': 0, 'shiny': False})
+    entry['caught'] += 1
+    entry['shiny'] = entry['shiny'] or pokemon['shiny']
 
 
 def bonus(state, role_ids):

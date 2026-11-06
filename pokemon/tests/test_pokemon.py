@@ -81,6 +81,7 @@ with patch.dict(sys.modules, modules):
     game = importlib.import_module(PKG+'.pokemon')
     battle = importlib.import_module(PKG+'.battle')
     dex_module = importlib.import_module(PKG+'.dex')
+    storage_module = importlib.import_module(PKG+'.storage')
 
 
 def state():
@@ -108,6 +109,18 @@ class Value:
     def __init__(self, value): self.value=copy.deepcopy(value)
     async def __call__(self, default=...): return copy.deepcopy(self.value)
     async def set(self, value): self.value=copy.deepcopy(value)
+
+
+class SnapshotValue:
+    """Read/write test snapshots through the same global store as production."""
+    def __init__(self, cog, gid=1): self.cog,self.gid=cog,gid
+    async def __call__(self, default=...): return await self.cog.state(self.gid)
+    async def set(self, state):
+        world=await self.cog.storage.world()
+        for key in storage_module.SHARED: world[key]=copy.deepcopy(state.get(key,{}))
+        world['interval']=state.get('interval',1800)
+        world['guilds'][str(self.gid)]={k:copy.deepcopy(v) for k,v in state.items() if k not in storage_module.SHARED and k!='interval'}
+        await self.cog.config.world.set(world)
 
 
 class RedMergeValue(Value):
@@ -187,12 +200,82 @@ class RulesTests(unittest.TestCase):
         self.assertFalse(battle.supported({**d.moves[33],'effect':2}))
 
 
+class GlobalStorageTests(unittest.IsolatedAsyncioTestCase):
+    def fixture(self, legacy):
+        self.sources={gid:Value(value) for gid,value in legacy.items()}
+        self.world=Value({})
+        config=types.SimpleNamespace(world=self.world,
+            all_guilds=AsyncMock(return_value={gid:{} for gid in legacy}),
+            guild_from_id=lambda gid:types.SimpleNamespace(state=self.sources[gid]))
+        return storage_module.GlobalStore(config)
+
+    async def test_migration_combines_assets_and_is_repeat_safe(self):
+        a,b=state(),state()
+        one=rules.account(a,1); two=rules.account(b,1)
+        one.update(xp=100,dust=200,last_pokestop=900)
+        two.update(xp=50,dust=70,last_pokestop=1000)
+        one['box']['a']=pokemon('a'); one['party']=['a']
+        two['box']['b']=pokemon('b'); two['party']=['b']
+        one['items']['potion']=2; two['items']['potion']=3
+        one['candy']['1']=4; two['candy']['1']=6
+        rules.record_catch(one,one['box']['a']);rules.record_catch(two,two['box']['b'])
+        a['roles']={'123':{'catch':2}};b['roles']={'456':{'xp':3}}
+        a['channel']=5;b['channel']=8
+        store=self.fixture({1:a,2:b})
+        world=await store.world(); player=world['players']['1']
+        self.assertEqual(player['xp'],150);self.assertEqual(player['dust'],270)
+        self.assertEqual(player['items']['potion'],5);self.assertEqual(player['candy']['1'],10)
+        self.assertEqual(set(player['box']),{'a','b'});self.assertEqual(player['party'],['a'])
+        self.assertEqual(player['pokedex']['1']['caught'],2)
+        self.assertEqual(player['last_pokestop'],1000)
+        self.assertEqual((await store.read(1))['roles'],a['roles'])
+        self.assertEqual((await store.read(2))['channel'],8)
+        self.assertEqual(await store.world(),world)
+        # A new store instance simulates a process restart; migration must not double assets.
+        self.assertEqual(await storage_module.GlobalStore(store.config).world(),world)
+
+    async def test_id_collisions_preserve_both_pokemon_and_party_references(self):
+        a,b=state(),state()
+        for s in (a,b):
+            p=rules.account(s,1);p['box']['same']=pokemon('same');p['party']=['same']
+        store=self.fixture({1:a,2:b})
+        world=await store.world();p=world['players']['1']
+        self.assertEqual(len(p['box']),2)
+        self.assertTrue(all(pid==mon['id'] for pid,mon in p['box'].items()))
+        self.assertIn(p['party'][0],p['box'])
+
+    async def test_global_interval_updates_all_schedules_keeps_local_settings(self):
+        a,b=state(),state();a['interval']=300;b['interval']=600
+        store=self.fixture({1:a,2:b})
+        self.assertEqual((await store.read(1))['interval'],1800)
+        s=await store.read(1);s['interval']=300
+        with patch('time.time',return_value=1000): await store.save(1,s)
+        for gid in (1,2):
+            loaded=await store.read(gid)
+            self.assertEqual(loaded['interval'],300)
+            self.assertEqual(loaded['next_spawn'],1300)
+        self.assertEqual((await store.read(2))['channel'],b['channel'])
+
+    async def test_delete_scrubs_global_records_and_legacy_backups(self):
+        a=state();rules.account(a,1)['box']['a']=pokemon('a')
+        a['pending_spawn_edits']={'old':{'spawn':{'attempts':{'1':{'count':1}}}}}
+        store=self.fixture({1:a});await store.world()
+        await store.delete_user(1)
+        self.assertNotIn('1',(await store.world())['players'])
+        self.assertNotIn('1',(await self.sources[1]())['players'])
+        self.assertEqual((await store.read(1))['pending_spawn_edits']['old']['spawn']['attempts'],{})
+        self.assertNotIn('1',(await storage_module.GlobalStore(store.config).world())['players'])
+
+
 class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.cog=object.__new__(game.Pokemon)
-        self.value=Value(state())
-        self.cog.config=types.SimpleNamespace(guild_from_id=lambda gid:types.SimpleNamespace(state=self.value),
+        self.legacy_value=Value(state())
+        self.global_value=Value({})
+        self.cog.config=types.SimpleNamespace(world=self.global_value,guild_from_id=lambda gid:types.SimpleNamespace(state=self.legacy_value),
                                            all_guilds=AsyncMock(return_value={1:{}}))
+        self.cog.storage=storage_module.GlobalStore(self.cog.config)
+        self.value=SnapshotValue(self.cog)
         self.cog.locks={}; self.cog.bank_locks={}; self.cog.active_battles={}; self.cog.views=set(); self.cog.expiry_tasks={}; self.cog.last_errors={}
         self.cog.dex=dex()
         self.user=types.SimpleNamespace(id=1,roles=[],display_name='Trainer One',name='one',display_avatar=types.SimpleNamespace(url='https://example.com/one.png'),guild_permissions=types.SimpleNamespace(administrator=False,manage_guild=False,manage_messages=False))
@@ -267,7 +350,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_trade_payment_and_assets_complete_together(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()
         s['trades']['t']={'from':1,'to':2,'offer':{'pokemon':['abc'],'items':{}},
-                         'request':{'pokemon':[],'items':{}},'currency':100,'expires':time_now()+100}
+                         'request':{'pokemon':[],'items':{}},'currency':100,'guild_id':1,'expires':time_now()+100}
         await self.value.set(s); self.i.user=self.other
         await self.cog.finish_trade(self.i,'t',True)
         stored=await self.value()
@@ -280,7 +363,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_trade_credit_failure_preserves_ownership_and_locks(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()
         s['trades']['t']={'from':1,'to':2,'offer':{'pokemon':['abc'],'items':{}},
-                         'request':{'pokemon':[],'items':{}},'currency':100,'expires':time_now()+100}
+                         'request':{'pokemon':[],'items':{}},'currency':100,'guild_id':1,'expires':time_now()+100}
         await self.value.set(s); self.i.user=self.other
         bank.deposit_credits.side_effect=RuntimeError('bank offline')
         with self.assertLogs('red.pokemon',level='ERROR'):
@@ -379,7 +462,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_expiry_clears_encounter_and_removes_public_buttons(self):
         s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,
-                              'expires':400,'channel':5,'message':10,'attempts':{}}
+                              'expires':220,'channel':5,'message':10,'attempts':{}}
         await self.value.set(s)
         message=types.SimpleNamespace(edit=AsyncMock())
         self.guild.get_channel=lambda cid:types.SimpleNamespace(get_partial_message=lambda mid:message)
@@ -395,27 +478,27 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         message.edit.assert_awaited_once()
 
     async def test_old_timer_cannot_remove_new_encounter(self):
-        s=state(); s['spawn']={'id':'new','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        s=state(); s['spawn']={'id':'new','pokemon':pokemon(),'spawned_at':100,'expires':220,'message':10}
         await self.value.set(s)
         with patch.object(game.time,'time',return_value=500):
             self.assertFalse(await self.cog.expire_spawn(1,'old'))
         self.assertEqual((await self.value())['spawn']['id'],'new')
 
     async def test_no_early_flee_and_exact_cutoff_rejects_catch_without_consuming_ball(self):
-        s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':220,'message':10}
         rules.account(s,1)['items']['master-ball']=1; await self.value.set(s)
-        with patch.object(game.time,'time',return_value=399.99):
+        with patch.object(game.time,'time',return_value=219.99):
             self.assertFalse(await self.cog.expire_spawn(1,'s'))
-        with patch.object(game.time,'time',return_value=400):
+        with patch.object(game.time,'time',return_value=220):
             with self.assertRaises(ValueError): await self.cog.catch(self.i,'s','master-ball',None)
             with self.assertRaises(ValueError): await self.cog.current_encounter(1,5)
         self.assertEqual((await self.value())['players']['1']['items']['master-ball'],1)
 
-    async def test_old_encounter_migrates_to_five_minutes(self):
+    async def test_old_encounter_migrates_to_two_minutes(self):
         s=state(); s['next_spawn']=1900
         s['spawn']={'id':'s','pokemon':pokemon(),'expires':1900,'message':10}
         await self.value.set(s)
-        self.assertEqual((await self.cog.state(1))['spawn']['expires'],400)
+        self.assertEqual((await self.cog.state(1))['spawn']['expires'],220)
         self.assertIsNone((await self.cog.state(1))['notify_role'])
 
     async def test_catch_command_encounter_requires_spawn_channel(self):
@@ -435,7 +518,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         s=state(); s['notify_role']=123; await self.value.set(s)
         with patch.object(game.time,'time',return_value=1000): await self.cog.spawn(1)
         stored=await self.value()
-        self.assertEqual(stored['spawn']['expires'],1300)
+        self.assertEqual(stored['spawn']['expires'],1120)
         self.assertEqual(stored['next_spawn'],2800)
         sent=channel.send.call_args.kwargs
         self.assertEqual(sent['content'],'<@&123>')
@@ -474,10 +557,10 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.cog.bot.wait_until_red_ready=AsyncMock()
         self.cog.schedule_expiry=Mock()
         await self.cog.before_scheduler()
-        self.assertEqual(self.cog.schedule_expiry.call_args.args[1]['expires'],400)
+        self.assertEqual(self.cog.schedule_expiry.call_args.args[1]['expires'],220)
 
     async def test_expiry_task_expires_and_cleans_up_its_registry(self):
-        s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':220,'message':10}
         await self.value.set(s)
         with patch.object(game.time,'time',return_value=400):
             self.cog.schedule_expiry(1,s['spawn'])
@@ -494,7 +577,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.cog.bot.is_admin=AsyncMock(return_value=False)
         self.user.guild_permissions=types.SimpleNamespace(administrator=False)
         await self.cog.set_notification_role(self.i,'123')
-        self.assertNotIn('notify_role',await self.value())
+        self.assertIsNone((await self.value())['notify_role'])
 
     async def test_settings_toggle_orders_reply_without_invalid_null_views(self):
         async def strict_send(**kwargs):
@@ -598,7 +681,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_flee_notice_retries_after_failed_edit_and_survives_new_spawn(self):
         s=state(); s['spawn']={'id':'old','pokemon':pokemon(),'spawned_at':100,
-                              'expires':400,'channel':5,'message':10,'attempts':{}}
+                              'expires':220,'channel':5,'message':10,'attempts':{}}
         await self.value.set(s)
         self.cog.edit_encounter=AsyncMock(return_value=False)
         with patch.object(game.time,'time',return_value=400):
@@ -665,16 +748,17 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_active_encounter_red_merge_regression_preserves_all_data(self):
         s=state(); s['next_spawn']=1900
-        s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':220,'message':10}
         rules.account(s,1)['box']['abc']=pokemon()
         s['orders']['receipt']={'user':1,'kind':'shop','status':'complete'}
-        self.value=RedMergeValue(s)
+        self.legacy_value=RedMergeValue(s)
         # This is the exact old read path from the user's traceback.
-        with self.assertRaises(TypeError): await self.value()
+        with self.assertRaises(TypeError): await self.legacy_value()
         loaded=await self.cog.state(1)
         self.assertEqual(loaded['spawn'],s['spawn'])
         self.assertEqual(loaded['players'],s['players'])
-        self.assertEqual(loaded['orders'],s['orders'])
+        self.assertEqual(loaded['orders']['receipt']['status'],s['orders']['receipt']['status'])
+        self.assertEqual(loaded['orders']['receipt']['guild_id'],1)
         await self.cog.admin_route(self.i,'Settings')
         self.assertEqual(self.i.followup.send.call_args.kwargs['embed'].title,'Pokémon settings')
         # Clear and re-create an encounter, checking both representations read safely.
@@ -687,8 +771,8 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_red_merge_regression_scheduler_can_expire_and_spawn_again(self):
         s=state(); s['interval']=300; s['next_spawn']=400
-        s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
-        self.value=RedMergeValue(s)
+        s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':220,'message':10}
+        self.legacy_value=RedMergeValue(s)
         self.cog.schedule_expiry=Mock()
         self.cog.dex.load=AsyncMock()
         self.cog.spawn=AsyncMock()
@@ -697,6 +781,75 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone((await self.cog.state(1))['spawn'])
         self.cog.spawn.assert_awaited_once_with(1)
         self.assertEqual(self.cog.last_errors,{})
+
+    async def test_pokedex_persists_species_after_transfer_and_deduplicates(self):
+        s=state(); player=rules.account(s,1)
+        first=pokemon('a'); shiny=pokemon('b'); shiny['shiny']=True
+        for mon in (first,shiny):
+            player['box'][mon['id']]=mon
+            rules.record_catch(player,mon)
+        rules.transfer(player,'a',1); rules.transfer(player,'b',1)
+        await self.value.set(s)
+        view=await self.cog.pokedex_view(1,1)
+        self.assertEqual(len(view.entries),1)
+        self.assertEqual(view.entries[0][1]['caught'],2)
+        self.assertTrue(view.entries[0][1]['shiny'])
+        self.assertIn('Bulbasaur',view.render().description)
+        self.assertEqual((await self.value())['players']['1']['box'],{})
+
+    async def test_pokedex_backfills_old_box_and_sorts_numerically(self):
+        s=state(); player=rules.account(s,1); player.pop('pokedex')
+        player['box']={'a':pokemon('a',10),'b':pokemon('b',2),'c':pokemon('c',2)}
+        await self.value.set(s)
+        view=await self.cog.pokedex_view(1,1)
+        self.assertEqual([sid for sid,_ in view.entries],['2','10'])
+        self.assertEqual(view.entries[0][1]['caught'],2)
+        again=await self.cog.pokedex_view(1,1)
+        self.assertEqual(again.entries,view.entries)
+
+    async def test_progress_and_pokestop_cooldown_are_shared_across_servers(self):
+        second=await self.cog.state(2);second['enabled']=True;second['channel']=8
+        await self.cog.save(2,second)
+        with patch.object(game.time,'time',return_value=1000):
+            await self.cog.spin_stop(1,1)
+            with self.assertRaisesRegex(ValueError,'recharging'): await self.cog.spin_stop(2,1)
+        self.assertEqual((await self.cog.state(1))['players'],(await self.cog.state(2))['players'])
+        self.assertIs(self.cog.lock(1),self.cog.lock(2))
+
+    async def test_simultaneous_cross_server_spins_cannot_award_twice(self):
+        second=await self.cog.state(2);second['enabled']=True;second['channel']=8
+        await self.cog.save(2,second)
+        with patch.object(game.time,'time',return_value=1000):
+            results=await asyncio.gather(self.cog.spin_stop(1,1),self.cog.spin_stop(2,1),return_exceptions=True)
+        self.assertEqual(sum(isinstance(r,tuple) for r in results),1)
+        self.assertEqual(sum(isinstance(r,ValueError) for r in results),1)
+
+    async def test_nonowner_cannot_change_global_interval_or_global_assets(self):
+        self.cog.bot.is_owner.return_value=False
+        for action,values in [('Interval',('5',)),('Give Pokémon',('1','1')),('Wipe box',('1',))]:
+            with self.assertRaisesRegex(ValueError,'bot owner'): await self.cog.admin_route(self.i,action)
+            with self.assertRaisesRegex(ValueError,'bot owner'): await self.cog.admin_action(self.i,action,*values)
+        menu=game.Menu(self.cog,1,admin=True,owner_controls=False)
+        labels={button.label for button in menu.children}
+        self.assertIn('Role bonuses',labels);self.assertIn('Spawn channel',labels)
+        self.assertNotIn('Interval',labels);self.assertNotIn('Wipe box',labels)
+
+    async def test_cross_server_catches_share_inventory_without_lost_rewards(self):
+        now=time_now()
+        first=await self.cog.state(1)
+        player=rules.account(first,1);player['items']['master-ball']=2
+        first['spawn']={'id':'one','pokemon':pokemon('a'),'spawned_at':now,'expires':now+120,'message':10,'attempts':{}}
+        await self.cog.save(1,first)
+        second=await self.cog.state(2);second['enabled']=True;second['channel']=8
+        second['spawn']={'id':'two','pokemon':pokemon('b'),'spawned_at':now,'expires':now+120,'message':20,'attempts':{}}
+        await self.cog.save(2,second)
+        other=copy.copy(self.i);other.guild_id=2
+        await asyncio.gather(self.cog.catch(self.i,'one','master-ball',None),self.cog.catch(other,'two','master-ball',None))
+        player=(await self.cog.state(2))['players']['1']
+        self.assertEqual(set(player['box']),{'a','b'})
+        self.assertEqual(player['xp'],200);self.assertEqual(player['dust'],200)
+        self.assertEqual(player['items']['master-ball'],0)
+        self.assertEqual(player['pokedex']['1']['caught'],2)
 
     async def test_delete_removes_inventory_orders_and_attempts(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()

@@ -9,15 +9,15 @@ An opt-in Red 3.5+ cog combining GO-style collection resources with main-series 
 3. Choose **Enable / disable** to enable this server. Every server starts disabled.
 4. Players open `[p]pokemon` (alias `[p]poke`) for an icon-labelled button menu. **Inventory** shows a grouped item bag with icons, quantities, Stardust, and total family Candy; depleted items are hidden. All subsequent input uses embeds, buttons, dropdowns, and modals. Moderator settings remain usable while the game is disabled.
 
-Grant View Channel, Send Messages, and Embed Links in the selected channel. The first encounter occurs after the configured interval, default **30 minutes**. The scheduler checks every 30 seconds. One public encounter exists per server. Spawn embeds show the Pokémon’s official artwork from the [PokéAPI sprites repository](https://github.com/PokeAPI/sprites). Each Pokémon stays for **five minutes**, then flees if nobody has caught it; the original message changes to **“The wild Pokémon fled!”**, keeps the artwork, and has its catch button removed. If Discord temporarily rejects the edit, a saved pending edit is retried by the scheduler, including after reloads. A deleted announcement is skipped. The encounter timer is separate from the spawn interval. Configure **Interval** in `[p]pokeset` from **5 to 1440 minutes**; five minutes is useful for testing. A new spawn waits for any active encounter to end. Restarting restores the original expiry deadline and does not produce a backlog of spawns. Catch buttons survive restarts. Other menus and pending trade buttons should be reopened after a reload.
+Grant View Channel, Send Messages, and Embed Links in the selected channel. The first encounter occurs after the configured interval, default **30 minutes**. The scheduler checks every 30 seconds. One public encounter exists per server. Spawn embeds show the Pokémon’s official artwork from the [PokéAPI sprites repository](https://github.com/PokeAPI/sprites). Each Pokémon stays for **two minutes**, then flees if nobody has caught it; the original message changes to **“The wild Pokémon fled!”**, keeps the artwork, and has its catch button removed. If Discord temporarily rejects the edit, a saved pending edit is retried by the scheduler, including after reloads. A deleted announcement is skipped. The encounter timer is separate from the spawn interval. The bot owner can configure the global **Interval** in `[p]pokeset` from **5 to 1440 minutes**; five minutes is useful for testing. A new spawn waits for any active encounter to end. Restarting restores the original expiry deadline and does not produce a backlog of spawns. Catch buttons survive restarts. Other menus and pending trade buttons should be reopened after a reload.
 
 First use downloads official [PokéAPI CSV tables](https://github.com/PokeAPI/pokeapi/tree/master/data/v2/csv) into the cog data directory. Network access is needed for this initial cache, not every encounter. The loader was checked against 1,025 species, 1,351 form records, 937 moves, and 25 natures. All nine generations in that dataset are available. Wild encounters currently select default species forms; the cache includes alternate-form data for future form selection. Remove the `dex` cache while the cog is unloaded to refresh upstream data.
 
 ## Pokéstop and catching
 
 - `[p]pokestop` grants **3–6 random supplies plus 50–150 Stardust**. Rewards include Poké/Great/Ultra Balls, potions (including stronger potions), revives, and berries. Master Balls and other premium balls are excluded. These are custom bot rewards rather than an exact GO drop table.
-- Each player can spin once every **five minutes per server**. The cooldown is saved across reloads. The command and the **Pokéstop** menu action share that cooldown. Pokémon must be enabled; no bank currency is charged.
-- `[p]pokecatch` (alias `[p]catch`) in the configured spawn channel opens ball selection for the current encounter. The spawn button and **Catch** menu action use the same capture rules. The first successful player catches it; failed attempts do not extend its five-minute window.
+- Each player can spin once every **five minutes globally**. The cooldown is saved across reloads. The command and the **Pokéstop** menu action share that cooldown. Pokémon must be enabled; no bank currency is charged.
+- `[p]pokecatch` (alias `[p]catch`) in the configured spawn channel opens ball selection for the current encounter. The spawn button and **Catch** menu action use the same capture rules. The first successful player catches it; failed attempts do not extend its two-minute window.
 - A caught encounter changes to a capture notice and loses its catch button. Expired menus cannot consume balls or grant a late capture, even if Discord cannot edit the public message.
 
 ## Trainer cards and staff PC viewing
@@ -80,15 +80,15 @@ Implemented: stat calculations, nature modifiers, IVs, capped EV yields on knock
 
 ## Administration and privacy
 
-`[p]pokeset` provides give/take Pokémon, give/take items, force evolution, role bonuses, interval settings, and confirmed PC box wipes. **Settings** shows the saved configuration and action buttons; **Enable / disable** saves and confirms the new state; **Orders** lists unresolved payment records (or explicitly reports none). Settings callbacks check permissions again; private menus reject other users. `[p]pokeorders` is bot-owner only.
+`[p]pokeset` lets server administrators configure enable/disable, spawn channel, notification role, and luck roles, and inspect member PC boxes. Only the bot owner sees and may use interval changes, give/take Pokémon or items, force evolution, PC box wipes, and global order review. These owner checks also run when submitting modals and confirming wipes. **Settings** shows the saved configuration and action buttons; **Enable / disable** saves and confirms the new state; **Orders** lists unresolved payment records (or explicitly reports none). Settings callbacks check permissions again; private menus reject other users. `[p]pokeorders` is bot-owner only.
 
-Collections and resources are per server. Red user deletion removes a user's stored collection, orders, trade proposals, and encounter attempts, and cancels active battles. Public Discord messages are not deleted by this hook. Unresolved bank exchanges should be reviewed before voluntarily deleting account records, because deletion removes the associated journal.
+Collections, parties, Pokémon HP/EVs, inventory, Pokédex, XP, Stardust, family Candy, and Pokéstop cooldowns are global across servers. Red user deletion removes a user's stored collection, orders, trade proposals, and encounter attempts, and cancels active battles. Public Discord messages are not deleted by this hook. Unresolved bank exchanges should be reviewed before voluntarily deleting account records, because deletion removes the associated journal.
 
 ## Validation
 
 `python -m unittest discover -s pokemon/tests -v`
 
-Tests use lightweight Discord/Red/bank doubles so they run without a bot token. They cover Pokéstop rewards and saved cooldowns, five-minute expiry, notification roles, catch races, single-charge purchases, uncertain payment recovery, trade validation/payment failures, component limits, stat rules, reserved wild species, and data deletion. Syntax checks and a live official-data import were also run. Live Discord and the actual Paimon bank integration still require a test-server check.
+Tests use lightweight Discord/Red/bank doubles so they run without a bot token. They cover Pokéstop rewards and saved cooldowns, two-minute expiry, notification roles, catch races, single-charge purchases, uncertain payment recovery, trade validation/payment failures, component limits, stat rules, reserved wild species, and data deletion. Syntax checks and a live official-data import were also run. Live Discord and the actual Paimon bank integration still require a test-server check.
 
 
 ## Troubleshooting settings and spawning
@@ -98,3 +98,25 @@ Tests use lightweight Discord/Red/bank doubles so they run without a bot token. 
 A bad server record during scheduler startup is logged and isolated so other servers continue spawning. Interaction failures now show an error type and reference. The bot owner can run `[p]pokediagnose` and click **Show private diagnostic report** to see scheduler health and the most recent captured traceback for this server. Reports are private to the owner; records remain in memory until the cog reloads. Reproduce the failure after loading this version, then open the report before reloading again.
 
 The cog explicitly overrides Red’s recursive defaults when reading the state group. This avoids Red attempting to merge an active encounter dictionary into the registered `spawn=None` default. No reset or migration of trainer data is needed for this fix.
+
+
+## Pokédex
+
+Use `[p]pokedex` or the **Pokédex** button in the Pokémon menu to browse your global catch records, sorted by National Pokédex number. Each species appears once, with its catch count and a marker if you have caught a shiny. Previous/Next buttons move through 15 species per page. Records remain after transfers, trades, or a PC box wipe; Red user-data deletion removes them.
+
+Existing accounts are seeded once from Pokémon currently in their boxes, including duplicates in the catch count. Old catches that were already transferred or traded away cannot be recovered. After this update, successful wild captures add to the record; staff grants and incoming trades do not count as new wild catches. The trainer card continues to count currently owned unique species separately.
+
+Wild encounters now expire **two minutes** after spawning. This does not change the configurable spawn interval (minimum five minutes), Pokéstop cooldown, or trade/battle timeouts. Existing encounters are shortened to the original spawn time plus two minutes when read after updating.
+
+
+## Global progress and migration
+
+One trainer collection is shared across all servers. Catching, transferring, evolving, powering up, trading, shopping, battling, and spinning a Pokéstop update that shared collection. A trainer cannot enter another battle or change the same assets in a different server while an exchange is unresolved. Pokéstop cooldowns also apply globally. Each server independently opts in and selects its spawn channel, notification role, and luck roles. Luck perks come from the server where the catch occurs.
+
+The spawn interval is one bot-wide setting, controlled only by the bot owner through `[p]pokeset` → **Interval**. Changing it reschedules all servers using the new cadence, preserving any currently active two-minute encounters. Server admins cannot use stale buttons or modals to bypass the owner check. PC wipes remove the trainer's global box; they no longer affect just the current server.
+
+On first load after updating, existing server collections merge automatically into global storage in one commit. Pokémon are preserved; colliding instance IDs receive new IDs. XP, Stardust, items, Candy, and Pokédex counts are summed; the latest Pokéstop cooldown is retained. The first nonempty valid party by ascending server ID is retained (up to six Pokémon). Shop/trade order journals keep their origin server; colliding order IDs gain a server prefix. Unaccepted trade proposals expire on migration without moving assets or money. The migration marker prevents duplicate imports after restarts.
+
+If all old servers used the same spawn interval, it is retained globally; otherwise the global interval starts at 30 minutes for the owner to configure. Existing local settings stay with their servers. Legacy records are retained as recovery backups and are never imported again. Red user-data deletion removes the global trainer data and corresponding legacy backup data.
+
+This cog does not change Red's bank mode or reset currency balances. If Red's bank is global, trainer-card money is global too. If Red's bank is local, each server still uses its existing currency wallet while purchased Pokémon items join the global bag. Trades are accepted in the originating server and require both members to be present there; Pokémon offered can come from catches in any server. Review uncertain payments against the origin server's bank, as shown by the order journal's `guild_id`.
