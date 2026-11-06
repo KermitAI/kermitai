@@ -5,13 +5,20 @@ An opt-in Red 3.5+ cog combining GO-style collection resources with main-series 
 ## Setup
 
 1. Install/load `pokemon` through your normal Red cog workflow.
-2. Run `[p]pokeset`. Select the spawn channel with the channel dropdown.
+2. Run `[p]pokeset`. Click **Spawn channel** to open the channel dropdown. Other settings use buttons, with modals for typed input.
 3. Choose **Enable / disable** to enable this server. Every server starts disabled.
 4. Players open `[p]pokemon` (alias `[p]poke`). All subsequent input uses embeds, buttons, dropdowns, and modals. Moderator settings remain usable while the game is disabled.
 
-Grant View Channel, Send Messages, and Embed Links in the selected channel. The first encounter occurs after the configured interval, default **30 minutes**. The scheduler checks every 30 seconds. One public encounter exists per server; the next encounter replaces an uncaught one. Restarting does not produce a backlog of spawns. Catch buttons survive restarts. Other menus and pending trade buttons should be reopened after a reload.
+Grant View Channel, Send Messages, and Embed Links in the selected channel. The first encounter occurs after the configured interval, default **30 minutes**. The scheduler checks every 30 seconds. One public encounter exists per server. Each Pokémon stays for **five minutes**, then flees if nobody has caught it; its message changes to a flee notice and the catch button is removed. The encounter timer is separate from the spawn interval. If the interval is shorter than five minutes, a new spawn waits for the current encounter to end. Restarting restores the original expiry deadline and does not produce a backlog of spawns. Catch buttons survive restarts. Other menus and pending trade buttons should be reopened after a reload.
 
 First use downloads official [PokéAPI CSV tables](https://github.com/PokeAPI/pokeapi/tree/master/data/v2/csv) into the cog data directory. Network access is needed for this initial cache, not every encounter. The loader was checked against 1,025 species, 1,351 form records, 937 moves, and 25 natures. All nine generations in that dataset are available. Wild encounters currently select default species forms; the cache includes alternate-form data for future form selection. Remove the `dex` cache while the cog is unloaded to refresh upstream data.
+
+## Pokéstop and catching
+
+- `[p]pokestop` grants **3–6 random supplies plus 50–150 Stardust**. Rewards include Poké/Great/Ultra Balls, potions (including stronger potions), revives, and berries. Master Balls and other premium balls are excluded. These are custom bot rewards rather than an exact GO drop table.
+- Each player can spin once every **five minutes per server**. The cooldown is saved across reloads. The command and the **Pokéstop** menu action share that cooldown. Pokémon must be enabled; no bank currency is charged.
+- `[p]pokecatch` (alias `[p]catch`) in the configured spawn channel opens ball selection for the current encounter. The spawn button and **Catch** menu action use the same capture rules. The first successful player catches it; failed attempts do not extend its five-minute window.
+- A caught encounter changes to a capture notice and loses its catch button. Expired menus cannot consume balls or grant a late capture, even if Discord cannot edit the public message.
 
 ## Collection rules
 
@@ -24,6 +31,9 @@ First use downloads official [PokéAPI CSV tables](https://github.com/PokeAPI/po
 - Pokémon have random levels 1–30 on capture, six IVs 0–31, six EVs, a nature, height, weight, and up to four level-up moves from the newest available version group. Power-ups/evolution refresh the four level-up moves; there is no move tutor yet. Hidden Power uses the cartridge IV bit ordering and its modern fixed move power.
 
 ## Roles
+
+Click **Notification role** in `[p]pokeset` and enter its role ID or role mention in the modal. Use a normal role that interested members can opt into through your server's existing role tools. Make the role mentionable, or give the bot Mention Everyone permission in the spawn channel. Only that role is allowed to ping in a new spawn announcement; notification settings do not grant or remove roles from members. Enter `0` in the notification-role modal to disable pings. Deleted roles or roles the bot can no longer mention are skipped without blocking spawning. Notifications are disabled by default.
+
 
 In `[p]pokeset` → **Role bonuses**, enter a server role ID and `catch,shiny,rare,xp,candy`, for example `1.2,2,2,1.5,1`. The first four values are multipliers 1–100; Candy is an extra integer 0–100. Enter role ID `0` to clear bonuses.
 
@@ -70,4 +80,4 @@ Collections and resources are per server. Red user deletion removes a user's sto
 
 `python -m unittest discover -s pokemon/tests -v`
 
-Tests use lightweight Discord/Red/bank doubles so they run without a bot token. They cover catch races, single-charge purchases, uncertain payment recovery, trade validation/payment failures, component limits, stat rules, reserved wild species, and data deletion. Syntax checks and a live official-data import were also run. Live Discord and the actual Paimon bank integration still require a test-server check.
+Tests use lightweight Discord/Red/bank doubles so they run without a bot token. They cover Pokéstop rewards and saved cooldowns, five-minute expiry, notification roles, catch races, single-charge purchases, uncertain payment recovery, trade validation/payment failures, component limits, stat rules, reserved wild species, and data deletion. Syntax checks and a live official-data import were also run. Live Discord and the actual Paimon bank integration still require a test-server check.

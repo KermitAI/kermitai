@@ -14,9 +14,10 @@ from redbot.core.data_manager import cog_data_path
 
 from .dex import Dex
 from .rules import (ITEMS, BALLS, account, bonus, choose_species, new_pokemon,
-                    catch_chance, stats, hidden_power, remove_pokemon, transfer, swap)
+                    catch_chance, stats, hidden_power, remove_pokemon, transfer, swap, spin_pokestop)
 
 log = logging.getLogger('red.pokemon')
+ENCOUNTER_SECONDS = 300
 
 
 def embed(title, text):
@@ -169,20 +170,32 @@ class Menu(View):
     def __init__(self, cog, owner, admin=False):
         super().__init__(cog, owner)
         self.admin_menu = admin
-        actions = ['Settings', 'Enable / disable', 'Interval', 'Role bonuses', 'Give Pokémon',
-                   'Take Pokémon', 'Give / take items', 'Force evolve', 'Wipe box', 'Orders'] if admin else [
-                   'Trainer', 'PC box', 'Inspect', 'Party', 'Transfer', 'Power up', 'Evolve', 'Shop',
-                   'Inventory', 'Trade', 'Battle', 'Orders']
+        if admin:
+            actions = ['Settings', 'Enable / disable', 'Spawn channel', 'Interval',
+                       'Notification role', 'Role bonuses', 'Give Pokémon', 'Take Pokémon',
+                       'Give / take items', 'Force evolve', 'Wipe box', 'Orders']
+            for index, action in enumerate(actions):
+                button = discord.ui.Button(label=action, row=index // 4,
+                    style=discord.ButtonStyle.danger if action == 'Wipe box' else discord.ButtonStyle.secondary)
+                async def choose(i, action=action):
+                    if not await cog.admin(i): return
+                    try:
+                        await cog.route(i, action, admin=True)
+                    except ValueError as error:
+                        await reply(i, 'Unable to complete', str(error))
+                button.callback = choose
+                self.add_item(button)
+            return
+        actions = ['Trainer', 'PC box', 'Inspect', 'Party', 'Transfer', 'Power up', 'Evolve', 'Shop',
+                   'Inventory', 'Trade', 'Battle', 'Pokéstop', 'Catch', 'Orders']
         select = discord.ui.Select(placeholder='Choose an action', options=[discord.SelectOption(label=a) for a in actions])
         async def choose(i):
-            if admin and not await cog.admin(i): return
             try:
-                await cog.route(i, select.values[0], admin)
+                await cog.route(i, select.values[0])
             except ValueError as error:
                 await reply(i, 'Unable to complete', str(error))
         select.callback = choose
         self.add_item(select)
-        if admin: self.add_item(ChannelChoice())
 
 
 class Box(View):
@@ -224,10 +237,11 @@ class Pokemon(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420021, force_registration=True)
         self.config.register_guild(state={'enabled': False, 'channel': None, 'interval': 1800,
-            'next_spawn': 0, 'spawn': None, 'roles': {}, 'players': {}, 'trades': {}, 'orders': {}})
+            'next_spawn': 0, 'spawn': None, 'notify_role': None, 'roles': {}, 'players': {}, 'trades': {}, 'orders': {}})
         self.dex = Dex(cog_data_path(self) / 'dex')
         self.locks, self.bank_locks, self.views = {}, {}, set()
         self.active_battles = {}
+        self.expiry_tasks = {}
 
     async def cog_load(self):
         self.spawn_view = Spawn(self)
@@ -236,6 +250,9 @@ class Pokemon(commands.Cog):
 
     def cog_unload(self):
         self.scheduler.cancel()
+        for task in self.expiry_tasks.values():
+            task.cancel()
+        self.expiry_tasks.clear()
         for view in list(self.views):
             view.stop()
         self.views.clear()
@@ -247,7 +264,14 @@ class Pokemon(commands.Cog):
         return self.bank_locks.setdefault(uid, asyncio.Lock())
 
     async def state(self, gid):
-        return await self.config.guild_from_id(gid).state()
+        state = await self.config.guild_from_id(gid).state()
+        state.setdefault('notify_role', None)
+        # Bound old encounters, whose expiry was tied to the spawn interval.
+        spawn = state.get('spawn')
+        if spawn:
+            started = spawn.get('spawned_at', state['next_spawn'] - state['interval'])
+            spawn['expires'] = min(spawn['expires'], started + ENCOUNTER_SECONDS)
+        return state
 
     async def save(self, gid, state):
         await self.config.guild_from_id(gid).state.set(state)
@@ -260,13 +284,13 @@ class Pokemon(commands.Cog):
         await reply(i, 'Administrator only', 'You need server administrator permissions or a configured bot admin role.')
         return False
 
-    async def available(self, gid):
+    async def available(self, gid, *, load_dex=True):
         state = await self.state(gid)
         guild = self.bot.get_guild(gid)
         if guild is None or await self.bot.cog_disabled_in_guild(self, guild):
             raise ValueError('The Pokémon cog is disabled in this server.')
         if not state['enabled']: raise ValueError('Pokémon is disabled here. Ask an administrator to use pokeset.')
-        if not self.dex.species: await self.dex.load()
+        if load_dex and not self.dex.species: await self.dex.load()
         return state
 
     @commands.guild_only()
@@ -281,12 +305,56 @@ class Pokemon(commands.Cog):
                        view=Menu(self, ctx.author.id))
 
     @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    @commands.command(name='pokestop')
+    async def pokestop(self, ctx):
+        """Spin your Pokéstop for random supplies and Stardust every five minutes."""
+        try:
+            items, dust = await self.spin_stop(ctx.guild.id, ctx.author.id)
+        except ValueError as error:
+            return await ctx.send(embed=embed('Pokéstop', str(error)))
+        await ctx.send(embed=embed('Pokéstop rewards', self.stop_rewards(items, dust)))
+
+    async def spin_stop(self, gid, uid):
+        async with self.lock(gid):
+            state = await self.available(gid, load_dex=False)
+            self.ensure_unlocked(state, uid)
+            rewards = spin_pokestop(account(state, uid), time.time())
+            await self.save(gid, state)
+            return rewards
+
+    @staticmethod
+    def stop_rewards(items, dust):
+        return '\n'.join(f'+{quantity} × {item}' for item, quantity in items.items()) + f'\n+{dust} Stardust\nSpin again in five minutes.'
+
+    async def current_encounter(self, gid, channel_id):
+        state = await self.available(gid, load_dex=False)
+        spawn = state['spawn']
+        if channel_id != state['channel']:
+            raise ValueError(f"Use the catch command in <#{state['channel']}>.")
+        if not spawn or spawn['expires'] <= time.time() or not spawn.get('message'):
+            raise ValueError('There is no wild Pokémon to catch right now.')
+        return spawn
+
+    @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    @commands.command(name='pokecatch', aliases=['catch'])
+    async def pokecatch(self, ctx):
+        """Choose a ball to catch the current wild Pokémon in the spawn channel."""
+        try:
+            spawn = await self.current_encounter(ctx.guild.id, ctx.channel.id)
+        except ValueError as error:
+            return await ctx.send(embed=embed('Cannot catch', str(error)))
+        await ctx.send(embed=embed('Choose a ball', 'A ball is consumed per attempt. The first successful trainer keeps this Pokémon.'),
+                       view=Catch(self, ctx.author.id, spawn['id']))
+
+    @commands.guild_only()
     @commands.admin_or_permissions(administrator=True)
     @commands.bot_has_permissions(embed_links=True)
     @commands.command(name='pokeset')
     async def pokeset(self, ctx):
         """Open Pokémon server settings and moderation tools."""
-        await ctx.send(embed=embed('Pokémon settings', 'Choose a channel, then explicitly enable spawning. Default interval: 30 minutes.'),
+        await ctx.send(embed=embed('Pokémon settings', 'Use the buttons to configure this server. Choose Spawn channel, then explicitly enable spawning. Default interval: 30 minutes.'),
                        view=Menu(self, ctx.author.id, admin=True))
 
     @tasks.loop(seconds=30)
@@ -295,6 +363,9 @@ class Pokemon(commands.Cog):
             try:
                 state = await self.state(gid)
                 if not self.bot.get_guild(gid): continue
+                if state['spawn']:
+                    self.schedule_expiry(gid, state['spawn'])
+                    await self.expire_spawn(gid, state['spawn']['id'])
                 if not state['enabled'] or not state['channel'] or state['next_spawn'] > time.time(): continue
                 if await self.bot.cog_disabled_in_guild(self, self.bot.get_guild(gid)): continue
                 await self.dex.load()
@@ -307,6 +378,48 @@ class Pokemon(commands.Cog):
     @scheduler.before_loop
     async def before_scheduler(self):
         await self.bot.wait_until_red_ready()
+        for gid in await self.config.all_guilds():
+            state = await self.state(gid)
+            if state['spawn']: self.schedule_expiry(gid, state['spawn'])
+
+    def schedule_expiry(self, gid, spawn):
+        existing = self.expiry_tasks.get(gid)
+        if existing and not existing.done(): return
+        async def wait_for_flee():
+            try:
+                while spawn['expires'] > time.time():
+                    await asyncio.sleep(max(0, spawn['expires'] - time.time()))
+                await self.expire_spawn(gid, spawn['id'])
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception('Pokémon expiry failed for guild %s', gid)
+            finally:
+                if self.expiry_tasks.get(gid) is asyncio.current_task():
+                    self.expiry_tasks.pop(gid, None)
+        self.expiry_tasks[gid] = asyncio.create_task(wait_for_flee())
+
+    async def edit_encounter(self, gid, spawn, title, text):
+        guild = self.bot.get_guild(gid)
+        channel_id = spawn.get('channel') or (await self.state(gid))['channel']
+        channel = guild and guild.get_channel(channel_id)
+        if not channel or not spawn.get('message'): return
+        try:
+            await channel.get_partial_message(spawn['message']).edit(
+                embed=embed(title, text), view=None, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            log.warning('Unable to update Pokémon encounter %s in guild %s', spawn['id'], gid)
+
+    async def expire_spawn(self, gid, spawn_id):
+        async with self.lock(gid):
+            state = await self.state(gid)
+            spawn = state['spawn']
+            if not spawn or spawn['id'] != spawn_id or spawn['expires'] > time.time(): return False
+            state['spawn'] = None
+            await self.save(gid, state)
+        await self.edit_encounter(gid, spawn, 'The wild Pokémon fled!',
+                                  f"{spawn['pokemon']['name'].replace('-', ' ').title()} escaped after five minutes.")
+        return True
 
     async def spawn(self, gid):
         async with self.lock(gid):
@@ -314,6 +427,7 @@ class Pokemon(commands.Cog):
             guild = self.bot.get_guild(gid)
             channel = guild and guild.get_channel(state['channel'])
             if not state['enabled'] or not channel or state['next_spawn'] > time.time(): return
+            if state['spawn'] and state['spawn']['expires'] > time.time(): return
             # One public species is selected. Registered role holders influence its rarity for everyone.
             rare = max((bonus(state, [r.id for r in m.roles])['rare'] for m in guild.members
                         if not m.bot and str(m.id) in state['players']), default=1)
@@ -323,15 +437,25 @@ class Pokemon(commands.Cog):
             pokemon['shiny'] = False
             now = time.time()
             state['spawn'] = {'id': uuid.uuid4().hex, 'pokemon': pokemon, 'message': None,
-                              'expires': now + state['interval'], 'attempts': {}}
+                              'spawned_at': now, 'channel': channel.id,
+                              'expires': now + ENCOUNTER_SECONDS, 'attempts': {}}
             state['next_spawn'] = now + state['interval']
             # Persist before posting: a crash cannot create two catchable encounters.
             await self.save(gid, state)
-            message = await channel.send(embed=embed('A wild Pokémon appeared!',
-                f"**{species['name'].replace('-', ' ').title()}** · Level {pokemon['level']}\nUse the button to throw a ball. This encounter lasts {state['interval']//60} minutes."),
-                view=self.spawn_view, allowed_mentions=discord.AllowedMentions.none())
+            role = guild.get_role(state['notify_role']) if state['notify_role'] else None
+            can_ping = role and not role.is_default() and not role.managed and (
+                role.mentionable or channel.permissions_for(guild.me).mention_everyone)
+            message = await channel.send(content=f'<@&{role.id}>' if can_ping else None,
+                embed=embed('A wild Pokémon appeared!',
+                f"**{species['name'].replace('-', ' ').title()}** · Level {pokemon['level']}\nUse the Catch button or the pokecatch command to throw a ball. Fleeing <t:{int(now + ENCOUNTER_SECONDS)}:R> (five minutes)."),
+                view=self.spawn_view,
+                allowed_mentions=discord.AllowedMentions(everyone=False, users=False,
+                                                        roles=[role] if can_ping else [], replied_user=False))
             state['spawn']['message'] = message.id
             await self.save(gid, state)
+            previous = self.expiry_tasks.pop(gid, None)
+            if previous: previous.cancel()
+            self.schedule_expiry(gid, state['spawn'])
 
     async def catch(self, i, spawn_id, ball, berry):
         async with self.lock(i.guild_id):
@@ -364,7 +488,12 @@ class Pokemon(commands.Cog):
             player['candy'][family] = player['candy'].get(family, 0) + candy
             state['spawn'] = None
             await self.save(i.guild_id, state)
-            return f"Caught {'✨ ' if pokemon['shiny'] else ''}**{pokemon['name']}**!\nID: `{pokemon['id']}` · +{xp} XP · +100 Stardust · +{candy} family Candy"
+            result = f"Caught {'✨ ' if pokemon['shiny'] else ''}**{pokemon['name']}**!\nID: `{pokemon['id']}` · +{xp} XP · +100 Stardust · +{candy} family Candy"
+            expiry = self.expiry_tasks.pop(i.guild_id, None)
+            if expiry: expiry.cancel()
+        await self.edit_encounter(i.guild_id, spawn, 'Pokémon caught!',
+                                  f"{pokemon['name'].replace('-', ' ').title()} was caught by <@{i.user.id}>.")
+        return result
 
     def ensure_unlocked(self, state, uid):
         if any(key[1] == uid for key in self.active_battles):
@@ -375,6 +504,14 @@ class Pokemon(commands.Cog):
     async def route(self, i, action, admin=False):
         if admin:
             return await self.admin_route(i, action)
+        if action == 'Pokéstop':
+            await i.response.defer(ephemeral=True)
+            items, dust = await self.spin_stop(i.guild_id, i.user.id)
+            return await reply(i, 'Pokéstop rewards', self.stop_rewards(items, dust))
+        if action == 'Catch':
+            spawn = await self.current_encounter(i.guild_id, i.channel_id)
+            return await reply(i, 'Choose a ball', 'Throw a ball before this Pokémon flees.',
+                               Catch(self, i.user.id, spawn['id']))
         if action in {'Trainer','PC box','Inventory','Orders','Shop'}:
             await i.response.defer(ephemeral=True)
             state = await self.available(i.guild_id)
@@ -471,7 +608,30 @@ class Pokemon(commands.Cog):
         p['moves'] = self.dex.learned_moves(p['pokemon_id'], p['level'])[-4:]
         p['hp'] = stats(p, self.dex)[0]
 
+    async def set_notification_role(self, i, value):
+        if not await self.admin(i): return
+        role_id = int(value.strip().removeprefix('<@&').removesuffix('>'))
+        role = i.guild.get_role(role_id) if role_id else None
+        if role_id and role is None:
+            raise ValueError('That role no longer exists. Enter a server role ID, or 0 to disable pings.')
+        if role and (role.is_default() or role.managed):
+            raise ValueError('Choose a normal server role that members can opt into.')
+        channel_id = (await self.state(i.guild_id))['channel']
+        channel = i.guild.get_channel(channel_id) if channel_id else None
+        permissions = channel.permissions_for(i.guild.me) if channel else i.guild.me.guild_permissions
+        if role and not role.mentionable and not permissions.mention_everyone:
+            raise ValueError('Make this role mentionable, or grant me Mention Everyone in the spawn channel.')
+        async with self.lock(i.guild_id):
+            state = await self.state(i.guild_id)
+            state['notify_role'] = role.id if role else None
+            await self.save(i.guild_id, state)
+        await reply(i, 'Spawn notifications updated', f'New encounters will ping <@&{role.id}>.' if role else 'Spawn role pings are disabled.')
+
     async def admin_route(self, i, action):
+        if action == 'Spawn channel':
+            view = View(self, i.user.id)
+            view.add_item(ChannelChoice())
+            return await reply(i, 'Spawn channel', 'Choose the channel where wild Pokémon should appear.', view)
         if action in {'Settings', 'Enable / disable', 'Orders'}:
             await i.response.defer(ephemeral=True)
             async with self.lock(i.guild_id):
@@ -485,8 +645,9 @@ class Pokemon(commands.Cog):
                 if action == 'Orders':
                     rows = [f"`{key}` · {o['status']} · {o.get('kind', 'shop')}" for key,o in state['orders'].items() if o['status'] not in {'complete','failed','cancelled'}]
                     return await reply(i, 'Orders requiring review', '\n'.join(rows[-30:]) or 'None. Bank-uncertain records must be reconciled against the bank by the bot owner.')
-                return await reply(i, 'Pokémon settings', f"Enabled: {state['enabled']}\nChannel: {state['channel']}\nInterval: {state['interval']//60} minutes\nRole bonuses: {state['roles']}\nRoles use the highest bonus for each category; bonuses do not stack.")
+                return await reply(i, 'Pokémon settings', f"Enabled: {state['enabled']}\nChannel: {state['channel']}\nInterval: {state['interval']//60} minutes\nEncounter duration: 5 minutes\nNotification role: {state['notify_role'] or 'Disabled'}\nRole bonuses: {state['roles']}\nRoles use the highest bonus for each category; bonuses do not stack.")
         fields = {
+            'Notification role': [('Role ID', 'Enter a role ID or role mention; 0 disables pings')],
             'Interval': [('Minutes', 'Default 30; minimum 1; maximum 1440')],
             'Role bonuses': [('Role ID', 'Use 0 to clear all role bonuses'), ('Multipliers', 'catch,shiny,rare,xp,candy e.g. 1.2,2,2,1.5,1')],
             'Give Pokémon': [('Member ID', 'Discord member ID'), ('Species', 'Pokédex number or species name')],
@@ -500,6 +661,8 @@ class Pokemon(commands.Cog):
         await i.response.send_modal(Input(self, action, fields[action], submit))
 
     async def admin_action(self, i, action, *values):
+        if action == 'Notification role':
+            return await self.set_notification_role(i, values[0])
         if action == 'Wipe box':
             uid = int(values[0])
             async def wipe(interaction):

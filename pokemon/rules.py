@@ -26,7 +26,7 @@ ITEMS = {**{k: v[0] for k, v in BALLS.items()}, 'potion': 200,
 def account(state, user_id):
     return state['players'].setdefault(str(user_id), {
         'xp': 0, 'dust': 0, 'candy': {}, 'box': {}, 'party': [],
-        'items': {'poke-ball': 20}, 'receipts': []})
+        'items': {'poke-ball': 20}, 'receipts': [], 'last_pokestop': 0})
 
 
 def bonus(state, role_ids):
@@ -140,3 +140,28 @@ def swap(state, first, second, offer, request):
         for item, qty in bundle['items'].items():
             source['items'][item] -= qty
             target['items'][item] = target['items'].get(item, 0) + qty
+
+
+# Custom bot rewards: a small supply spin, not premium balls or raid-only items.
+POKESTOP_COOLDOWN = 300
+POKESTOP_LOOT = {
+    'poke-ball': 40, 'great-ball': 15, 'ultra-ball': 5,
+    'potion': 12, 'super-potion': 8, 'hyper-potion': 4, 'max-potion': 1,
+    'revive': 5, 'max-revive': 1, 'razz-berry': 5, 'pinap-berry': 4,
+}
+
+
+def spin_pokestop(player, now, rng=random):
+    """Apply rewards and cooldown together; caller commits under the guild lock."""
+    remaining = player.get('last_pokestop', 0) + POKESTOP_COOLDOWN - now
+    if remaining > 0:
+        raise ValueError(f'Your Pokéstop is recharging. Try again in {math.ceil(remaining)} seconds.')
+    items = {}
+    for item in rng.choices(list(POKESTOP_LOOT), weights=list(POKESTOP_LOOT.values()), k=rng.randint(3, 6)):
+        items[item] = items.get(item, 0) + 1
+    dust = rng.randint(50, 150)
+    for item, quantity in items.items():
+        player['items'][item] = player['items'].get(item, 0) + quantity
+    player['dust'] += dust
+    player['last_pokestop'] = now
+    return items, dust

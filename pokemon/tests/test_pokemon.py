@@ -9,7 +9,7 @@ import random
 import sys
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 ROOT = Path(__file__).parents[1]
 PKG = 'pokemon_test_package'
@@ -49,10 +49,11 @@ bank = types.SimpleNamespace()
 modules = {
     PKG: pkg,
     'discord': types.SimpleNamespace(ui=types.SimpleNamespace(View=View, Modal=View, Button=Component,
-        Select=Component, TextInput=Component, ChannelSelect=Component), SelectOption=Component,
+        Select=Component, TextInput=Component, ChannelSelect=Component, RoleSelect=Component), SelectOption=Component,
         Embed=Component, ButtonStyle=types.SimpleNamespace(danger=1, success=2, secondary=3),
         ChannelType=types.SimpleNamespace(text=0), Status=types.SimpleNamespace(offline='offline'),
-        AllowedMentions=types.SimpleNamespace(none=lambda:None)),
+        HTTPException=type('HTTPException',(Exception,),{}),
+        AllowedMentions=type('AllowedMentions',(Component,),{'none':staticmethod(lambda:None)})),
     'discord.ext': types.SimpleNamespace(tasks=types.SimpleNamespace(loop=lambda **kw:lambda fn:Loop(fn))),
     'redbot': types.ModuleType('redbot'),
     'redbot.core': types.SimpleNamespace(Config=object, bank=bank, commands=types.SimpleNamespace(
@@ -162,11 +163,11 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.value=Value(state())
         self.cog.config=types.SimpleNamespace(guild_from_id=lambda gid:types.SimpleNamespace(state=self.value),
                                            all_guilds=AsyncMock(return_value={1:{}}))
-        self.cog.locks={}; self.cog.bank_locks={}; self.cog.active_battles={}; self.cog.views=set()
+        self.cog.locks={}; self.cog.bank_locks={}; self.cog.active_battles={}; self.cog.views=set(); self.cog.expiry_tasks={}
         self.cog.dex=dex()
         self.user=types.SimpleNamespace(id=1,roles=[])
         self.other=types.SimpleNamespace(id=2,roles=[])
-        self.guild=types.SimpleNamespace(id=1,get_member=lambda uid:{1:self.user,2:self.other}.get(uid))
+        self.guild=types.SimpleNamespace(id=1,get_member=lambda uid:{1:self.user,2:self.other}.get(uid), get_channel=lambda cid:None)
         self.cog.bot=types.SimpleNamespace(get_cog=lambda n:self.cog,get_guild=lambda gid:self.guild,
             cog_disabled_in_guild=AsyncMock(return_value=False),is_owner=AsyncMock(return_value=True))
         self.i=types.SimpleNamespace(guild_id=1,guild=self.guild,user=self.user,
@@ -181,10 +182,17 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         view=game.Catch(self.cog,1,'spawn')
         ball_options=sum(len(c.options) for c in view.children if hasattr(c,'options') and c.placeholder != 'Optional berry')
         self.assertEqual(ball_options,len(rules.BALLS))
-        game.Menu(self.cog,1); game.Menu(self.cog,1,admin=True)
+        game.Menu(self.cog,1)
+        admin_menu=game.Menu(self.cog,1,admin=True)
+        self.assertEqual(len(admin_menu.children),12)
+        self.assertTrue(all(hasattr(child,'label') and not hasattr(child,'options') for child in admin_menu.children))
+        self.cog.route=AsyncMock()
+        for button in admin_menu.children:
+            await button.callback(self.i)
+            self.cog.route.assert_awaited_with(self.i,button.label,admin=True)
 
     async def test_simultaneous_catch_has_one_winner(self):
-        s=state(); s['spawn']={'id':'spawn','pokemon':pokemon(),'expires':time_now()+100,'attempts':{},'message':10}
+        s=state(); s['spawn']={'id':'spawn','pokemon':pokemon(),'spawned_at':time_now(),'expires':time_now()+100,'attempts':{},'message':10}
         rules.account(s,1)['items']['master-ball']=1
         rules.account(s,2)['items']['master-ball']=1
         await self.value.set(s)
@@ -293,10 +301,169 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored['players']['1']['items']['potion'],5)
         self.assertFalse(self.cog.active_battles)
 
+    async def test_pokestop_awards_supplies_and_dust_without_bank_payment(self):
+        with patch.object(game.time,'time',return_value=1000):
+            items,dust=await self.cog.spin_stop(1,1)
+        stored=await self.value()
+        self.assertTrue(3 <= sum(items.values()) <= 6)
+        self.assertTrue(50 <= dust <= 150)
+        self.assertEqual(stored['players']['1']['dust'],dust)
+        self.assertEqual(stored['players']['1']['last_pokestop'],1000)
+        for item,quantity in items.items():
+            self.assertIn(item,rules.ITEMS)
+            self.assertEqual(stored['players']['1']['items'][item],quantity+(20 if item=='poke-ball' else 0))
+        bank.withdraw_credits.assert_not_awaited()
+
+    async def test_pokestop_concurrent_spins_only_reward_once(self):
+        with patch.object(game.time,'time',return_value=1000):
+            results=await asyncio.gather(self.cog.spin_stop(1,1),self.cog.spin_stop(1,1),return_exceptions=True)
+        self.assertEqual(sum(isinstance(r,tuple) for r in results),1)
+        self.assertEqual(sum(isinstance(r,ValueError) for r in results),1)
+
+    async def test_pokestop_cooldown_survives_existing_accounts_and_boundary(self):
+        s=state(); old=rules.account(s,1); old.pop('last_pokestop')
+        await self.value.set(s)
+        with patch.object(game.time,'time',return_value=1000): await self.cog.spin_stop(1,1)
+        snapshot=await self.value()
+        with patch.object(game.time,'time',return_value=1299.9):
+            with self.assertRaisesRegex(ValueError,'1 seconds'): await self.cog.spin_stop(1,1)
+        self.assertEqual(await self.value(),snapshot)
+        with patch.object(game.time,'time',return_value=1300): await self.cog.spin_stop(1,1)
+        self.assertEqual((await self.value())['players']['1']['last_pokestop'],1300)
+
+    async def test_pokestop_disabled_and_trade_locks_prevent_rewards(self):
+        s=state(); s['enabled']=False; await self.value.set(s)
+        with self.assertRaises(ValueError): await self.cog.spin_stop(1,1)
+        s['enabled']=True; s['orders']['t']={'kind':'trade','users':[1,2],'status':'crediting'}
+        await self.value.set(s)
+        with self.assertRaises(ValueError): await self.cog.spin_stop(1,1)
+        self.assertEqual((await self.value())['players'],{})
+
+    async def test_pokestop_users_have_independent_cooldowns(self):
+        with patch.object(game.time,'time',return_value=1000):
+            await self.cog.spin_stop(1,1)
+            await self.cog.spin_stop(1,2)
+        self.assertEqual(len((await self.value())['players']),2)
+
+    async def test_expiry_clears_encounter_and_removes_public_buttons(self):
+        s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,
+                              'expires':400,'channel':5,'message':10,'attempts':{}}
+        await self.value.set(s)
+        message=types.SimpleNamespace(edit=AsyncMock())
+        self.guild.get_channel=lambda cid:types.SimpleNamespace(get_partial_message=lambda mid:message)
+        with patch.object(game.time,'time',return_value=400):
+            self.assertTrue(await self.cog.expire_spawn(1,'s'))
+        self.assertIsNone((await self.value())['spawn'])
+        self.assertIsNone(message.edit.call_args.kwargs['view'])
+        self.assertEqual(message.edit.call_args.kwargs['embed'].title,'The wild Pokémon fled!')
+        self.assertFalse(await self.cog.expire_spawn(1,'s'))
+        message.edit.assert_awaited_once()
+
+    async def test_old_timer_cannot_remove_new_encounter(self):
+        s=state(); s['spawn']={'id':'new','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        await self.value.set(s)
+        with patch.object(game.time,'time',return_value=500):
+            self.assertFalse(await self.cog.expire_spawn(1,'old'))
+        self.assertEqual((await self.value())['spawn']['id'],'new')
+
+    async def test_no_early_flee_and_exact_cutoff_rejects_catch_without_consuming_ball(self):
+        s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        rules.account(s,1)['items']['master-ball']=1; await self.value.set(s)
+        with patch.object(game.time,'time',return_value=399.99):
+            self.assertFalse(await self.cog.expire_spawn(1,'s'))
+        with patch.object(game.time,'time',return_value=400):
+            with self.assertRaises(ValueError): await self.cog.catch(self.i,'s','master-ball',None)
+            with self.assertRaises(ValueError): await self.cog.current_encounter(1,5)
+        self.assertEqual((await self.value())['players']['1']['items']['master-ball'],1)
+
+    async def test_old_encounter_migrates_to_five_minutes(self):
+        s=state(); s['next_spawn']=1900
+        s['spawn']={'id':'s','pokemon':pokemon(),'expires':1900,'message':10}
+        await self.value.set(s)
+        self.assertEqual((await self.cog.state(1))['spawn']['expires'],400)
+        self.assertIsNone((await self.cog.state(1))['notify_role'])
+
+    async def test_catch_command_encounter_requires_spawn_channel(self):
+        s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':time_now(),'expires':time_now()+100,'message':10}
+        await self.value.set(s)
+        with self.assertRaisesRegex(ValueError,'<#5>'): await self.cog.current_encounter(1,6)
+        self.assertEqual((await self.cog.current_encounter(1,5))['id'],'s')
+
+    async def test_spawn_duration_and_role_ping_are_independent_of_interval(self):
+        role=types.SimpleNamespace(id=123,mentionable=True,managed=False,is_default=lambda:False)
+        channel=types.SimpleNamespace(id=5,send=AsyncMock(return_value=types.SimpleNamespace(id=10)))
+        self.guild.get_channel=lambda cid:channel
+        self.guild.get_role=lambda rid:role
+        self.guild.members=[]
+        self.cog.spawn_view=game.Spawn(self.cog)
+        self.cog.schedule_expiry=Mock()
+        s=state(); s['notify_role']=123; await self.value.set(s)
+        with patch.object(game.time,'time',return_value=1000): await self.cog.spawn(1)
+        stored=await self.value()
+        self.assertEqual(stored['spawn']['expires'],1300)
+        self.assertEqual(stored['next_spawn'],2800)
+        sent=channel.send.call_args.kwargs
+        self.assertEqual(sent['content'],'<@&123>')
+        self.assertEqual(sent['allowed_mentions'].roles,[role])
+        self.assertFalse(sent['allowed_mentions'].everyone)
+        self.assertFalse(sent['allowed_mentions'].users)
+        self.cog.schedule_expiry.assert_called_once()
+
+    async def test_spawn_does_not_ping_deleted_or_unmentionable_role(self):
+        channel=types.SimpleNamespace(id=5,send=AsyncMock(return_value=types.SimpleNamespace(id=10)),
+            permissions_for=lambda member:types.SimpleNamespace(mention_everyone=False))
+        self.guild.get_channel=lambda cid:channel
+        self.guild.members=[]; self.guild.me=object()
+        self.cog.spawn_view=game.Spawn(self.cog); self.cog.schedule_expiry=Mock()
+        for role in (None,types.SimpleNamespace(id=123,mentionable=False,managed=False,is_default=lambda:False)):
+            self.guild.get_role=lambda rid:role
+            s=state(); s['notify_role']=123; await self.value.set(s)
+            await self.cog.spawn(1)
+            self.assertIsNone(channel.send.call_args.kwargs['content'])
+            self.assertEqual(channel.send.call_args.kwargs['allowed_mentions'].roles,[])
+
+    async def test_notification_role_can_be_set_and_cleared(self):
+        role=types.SimpleNamespace(id=123,mentionable=True,managed=False,is_default=lambda:False)
+        self.guild.get_role=lambda rid:role
+        self.guild.me=types.SimpleNamespace(guild_permissions=types.SimpleNamespace(mention_everyone=False))
+        await self.cog.set_notification_role(self.i,'123')
+        self.assertEqual((await self.value())['notify_role'],123)
+        await self.cog.set_notification_role(self.i,'0')
+        self.assertIsNone((await self.value())['notify_role'])
+
+    async def test_restart_rearms_existing_expiry_without_resetting_deadline(self):
+        s=state(); s['next_spawn']=1900
+        s['spawn']={'id':'s','pokemon':pokemon(),'expires':1900,'message':10}
+        await self.value.set(s)
+        self.cog.bot.wait_until_red_ready=AsyncMock()
+        self.cog.schedule_expiry=Mock()
+        await self.cog.before_scheduler()
+        self.assertEqual(self.cog.schedule_expiry.call_args.args[1]['expires'],400)
+
+    async def test_expiry_task_expires_and_cleans_up_its_registry(self):
+        s=state(); s['spawn']={'id':'s','pokemon':pokemon(),'spawned_at':100,'expires':400,'message':10}
+        await self.value.set(s)
+        with patch.object(game.time,'time',return_value=400):
+            self.cog.schedule_expiry(1,s['spawn'])
+            task=self.cog.expiry_tasks[1]
+            # Scheduling the same live encounter does not create a second timer.
+            self.cog.schedule_expiry(1,s['spawn'])
+            self.assertIs(self.cog.expiry_tasks[1],task)
+            await task
+        self.assertEqual(self.cog.expiry_tasks,{})
+        self.assertIsNone((await self.value())['spawn'])
+
+    async def test_notification_role_callback_requires_admin(self):
+        self.cog.bot.is_owner=AsyncMock(return_value=False)
+        self.cog.bot.is_admin=AsyncMock(return_value=False)
+        self.user.guild_permissions=types.SimpleNamespace(administrator=False)
+        await self.cog.set_notification_role(self.i,'123')
+        self.assertNotIn('notify_role',await self.value())
+
     async def test_delete_removes_inventory_orders_and_attempts(self):
         s=state(); rules.account(s,1)['box']['abc']=pokemon()
         s['orders']['o']={'user':1,'kind':'shop','status':'complete'}
-        s['spawn']={'attempts':{'1':{}}}; await self.value.set(s)
+        s['spawn']={'attempts':{'1':{}},'spawned_at':time_now(),'expires':time_now()+100}; await self.value.set(s)
         await self.cog.red_delete_data_for_user(requester='discord_deleted_user',user_id=1)
         stored=await self.value()
         self.assertNotIn('1',stored['players']); self.assertEqual(stored['orders'],{})
