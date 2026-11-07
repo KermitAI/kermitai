@@ -314,18 +314,20 @@ class Polls(commands.Cog):
         message = self.bot.get_partial_messageable(poll["channel"]).get_partial_message(int(pid))
         self.dirty.add((gid, pid))
         old = self.views.get((gid, pid))
-        view = None if poll.get("closed") else Ballot(self, gid, pid, poll)
-        try:
-            await message.edit(embed=poll_embed(poll), view=view, allowed_mentions=discord.AllowedMentions.none())
-        except discord.HTTPException:
-            if view:
-                view.stop()
-            raise
-        if old:
-            old.stop()
-        if view:
-            self.views[gid, pid] = view
-        else:
+        view = None
+        if not poll.get("closed"):
+            # Reuse the registered handler. Stopping an older view after an edit
+            # can unregister the new buttons because their custom IDs are equal.
+            view = old
+            if view is None or view.is_finished():
+                view = Ballot(self, gid, pid, poll)
+                self.views[gid, pid] = view
+            for button, total in zip(view.children, counts(poll)):
+                button.label = str(total)
+        await message.edit(embed=poll_embed(poll), view=view, allowed_mentions=discord.AllowedMentions.none())
+        if view is None:
+            if old:
+                old.stop()
             self.views.pop((gid, pid), None)
         self.dirty.discard((gid, pid))
 
@@ -437,8 +439,6 @@ class Polls(commands.Cog):
         """Close a poll immediately and post results. Supply its message ID or link."""
         if ctx.interaction:
             await ctx.defer()
-        if ctx.interaction:
-            await ctx.defer()
         await self.manage_poll(ctx, poll)
 
     @commands.hybrid_command()
@@ -467,8 +467,6 @@ class Polls(commands.Cog):
     @commands.bot_has_permissions(embed_links=True)
     async def pollcreate(self, ctx):
         """Open a poll builder. Only the creator can operate its controls."""
-        if ctx.interaction:
-            await ctx.defer()
         if ctx.interaction:
             await ctx.defer()
         builder = Builder(self, ctx)

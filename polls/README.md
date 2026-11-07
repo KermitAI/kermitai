@@ -37,3 +37,5 @@ See [Red's slash command guide](https://docs.discord.red/en/stable/guide_slash_a
 All commands also support slash invocation and retain their prefix versions. /pollcreate, /pollclose, and /polldelete. Use a message link or ID for message references. Server-only restrictions and administrator checks apply to both invocation styles. Slash commands default to members with Manage Server permission.
 
 After updating and reloading the cog, the bot owner must enable and sync its application commands using Red’s slash-command management commands.
+
+Button registration regression checks in `tests/test_dispatch.py` use discord.py without connecting to Discord. With discord.py installed, the test suite also checks repeated voting/removal, restored poll buttons, failed edit recovery and closed poll cleanup. These checks skip when discord.py is unavailable.
