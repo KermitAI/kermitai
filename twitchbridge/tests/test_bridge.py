@@ -95,7 +95,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await self.cog.config.bot_auth.set({"client_id": "client", "user_id": "bot",
             "expires_at": 0, "refresh_token": "old", "access_token": "expired"})
         self.cog._request.side_effect = [(200, {"access_token": "new", "refresh_token": "rotated", "expires_in": 10000}),
-            (200, {"client_id": "client", "user_id": "bot", "scopes": ["user:read:chat", "user:write:chat"]})]
+            (200, {"client_id": "client", "user_id": "bot", "scopes": ["user:read:chat", "user:write:chat", "moderator:manage:announcements"]})]
         _, auth = await self.cog._token()
         self.assertEqual(auth["refresh_token"], "rotated")
         self.assertEqual((await self.cog.config.bot_auth())["access_token"], "new")
@@ -120,7 +120,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.cog._request.side_effect = [(200, {"verification_uri": "https://www.twitch.tv/activate",
             "user_code": "code", "device_code": "device", "interval": 1, "expires_in": 60}),
             (200, {"access_token": "token", "refresh_token": "refresh", "expires_in": 100}),
-            (200, {"client_id": "client", "login": "imposter", "user_id": "999", "scopes": ["user:read:chat", "user:write:chat"]})]
+            (200, {"client_id": "client", "login": "imposter", "user_id": "999", "scopes": ["user:read:chat", "user:write:chat", "moderator:manage:announcements"]})]
         user = types.SimpleNamespace(send=AsyncMock())
         with patch.object(module.asyncio, "sleep", new=AsyncMock()):
             await self.cog._authorize(user, 1, "expected")
@@ -132,7 +132,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             "user_code": "code", "device_code": "device", "interval": 1, "expires_in": 60}),
             (400, {"message": "authorization_pending"}),
             (200, {"access_token": "token", "refresh_token": "refresh", "expires_in": 100}),
-            (200, {"client_id": "client", "login": "paimon", "user_id": "bot", "scopes": ["user:read:chat", "user:write:chat"]})]
+            (200, {"client_id": "client", "login": "paimon", "user_id": "bot", "scopes": ["user:read:chat", "user:write:chat", "moderator:manage:announcements"]})]
         user = types.SimpleNamespace(send=AsyncMock())
         with patch.object(module.asyncio, "sleep", new=AsyncMock()):
             await self.cog._authorize(user)

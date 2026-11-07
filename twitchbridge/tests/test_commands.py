@@ -128,6 +128,31 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         self.cog._send_twitch.assert_not_awaited()
 
 
+    async def test_native_announcement_uses_moderator_id_color_and_204(self):
+        self.cog._token.return_value[1]["scopes"].append("moderator:manage:announcements")
+        self.cfg["announcement_color"] = "purple"
+        self.cog._request.return_value = (204, {})
+        await self.cog._send_twitch(1, "Starting soon", announcement=True)
+        call = self.cog._request.call_args
+        self.assertEqual(call.args, ("POST", module.BASE + "chat/announcements"))
+        self.assertEqual(call.kwargs["params"], {"broadcaster_id": "123", "moderator_id": "bot"})
+        self.assertEqual(call.kwargs["json"], {"message": "Starting soon", "color": "purple"})
+
+    async def test_missing_announcement_scope_does_not_fall_back_to_plain_chat(self):
+        with self.assertRaises(module.BridgeError) as raised:
+            await self.cog._send_twitch(1, "Starting soon", announcement=True)
+        self.assertIn("authbot", str(raised.exception))
+        self.cog._request.assert_not_awaited()
+
+    async def test_announcement_requires_moderator_and_is_not_retried(self):
+        self.cog._token.return_value[1]["scopes"].append("moderator:manage:announcements")
+        self.cog._request.return_value = (403, {})
+        with self.assertRaises(module.BridgeError) as raised:
+            await self.cog._send_twitch(1, "Starting soon", announcement=True)
+        self.assertIn("moderator", str(raised.exception))
+        self.cog._request.assert_awaited_once()
+
+
 class CommandPolicyTests(unittest.TestCase):
     def test_templates_are_not_recursive_and_preserve_literal_braces(self):
         self.assertEqual(policy.render_response("{user} {args} {channel} {unknown}",

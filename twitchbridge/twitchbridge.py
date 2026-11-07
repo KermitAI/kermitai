@@ -14,7 +14,7 @@ from .policy import (RecentMessages, log_line, login_name, reconnect_url, comman
 BASE = "https://api.twitch.tv/helix/"
 AUTH = "https://id.twitch.tv/oauth2/"
 SOCKET = "wss://eventsub.wss.twitch.tv/ws"
-SCOPES = "user:read:chat user:write:chat"
+SCOPES = "user:read:chat user:write:chat moderator:manage:announcements"
 
 
 class BridgeError(Exception):
@@ -30,7 +30,7 @@ class TwitchBridge(commands.Cog):
         self.config.register_global(bot_auth={})
         self.config.register_guild(broadcaster="", broadcaster_id="", broadcaster_auth={},
                                    chatlog=None, enabled=False, custom_commands={},
-                                   announcements=None, command_prefix="!")
+                                   announcements=None, command_prefix="!", announcement_color="primary")
         self.http = None
         self.runner = None
         self.sender = None
@@ -76,6 +76,8 @@ class TwitchBridge(commands.Cog):
     async def _request(self, method, url, **kwargs):
         try:
             async with self.http.request(method, url, **kwargs) as response:
+                if response.status == 204:
+                    return 204, {}
                 data = await response.json(content_type=None)
                 return response.status, data
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
@@ -453,7 +455,8 @@ class TwitchBridge(commands.Cog):
             f"Connection: {self.status}\nDelivery: {self.delivery_status}\n"
             f"Queued logs: {self.queue.qsize()} | Dropped logs: {self.dropped}\n"
             f"Commands: {self.command_status} | Queue: {self.command_queue.qsize()} | Dropped: {self.command_dropped}\n"
-            f"Chat writing authorized: {'user:write:chat' in auth.get('scopes', [])}",
+            f"Chat writing authorized: {'user:write:chat' in auth.get('scopes', [])}\n"
+            f"Announcements authorized: {'moderator:manage:announcements' in auth.get('scopes', [])}",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -481,11 +484,11 @@ class TwitchBridge(commands.Cog):
                     self.cooldowns.pop(old, None)
             return text
 
-    async def _send_twitch(self, guild_id, text, expected_broadcaster=None):
+    async def _send_twitch(self, guild_id, text, expected_broadcaster=None, *, announcement=False):
         text = chat_text(text)
         # Stay below the normal 20 messages/30 sec chat limit across all channels.
         async with self.send_lock:
-            await asyncio.sleep(max(0, self.last_send + 1.6 - time.monotonic()))
+            await asyncio.sleep(max(0, self.last_send + 2.1 - time.monotonic()))
             cfg = await self.config.guild_from_id(guild_id).all()
             if not cfg["enabled"] or not cfg["broadcaster_id"]:
                 raise BridgeError("The Twitch connection is paused or not configured.")
@@ -494,6 +497,20 @@ class TwitchBridge(commands.Cog):
             client_id, auth = await self._token()
             if cfg["broadcaster_auth"].get("client_id") != client_id:
                 raise BridgeError("Authorize the broadcaster for this application first.")
+            if announcement:
+                if "moderator:manage:announcements" not in auth.get("scopes", []):
+                    raise BridgeError("Announcements need approval. Run twitchset authbot again as Paimon's Twitch account.")
+                self.last_send = time.monotonic()
+                code, _ = await self._request("POST", BASE + "chat/announcements", headers={
+                    "Client-Id": client_id, "Authorization": "Bearer " + auth["access_token"],
+                }, params={"broadcaster_id": cfg["broadcaster_id"], "moderator_id": auth["user_id"]},
+                    json={"message": text, "color": cfg.get("announcement_color", "primary")})
+                if code == 403:
+                    raise BridgeError("Paimon must be a moderator in the linked Twitch channel to send announcements.")
+                if code != 204:
+                    raise BridgeError(f"Twitch did not accept the announcement (HTTP {code}). Check announcement authorization and moderator status.")
+                self.command_status = "Last Twitch announcement sent successfully"
+                return None
             if "user:write:chat" not in auth.get("scopes", []):
                 raise BridgeError("Chat writing needs approval. Run twitchset authbot again as Paimon's Twitch account.")
             self.last_send = time.monotonic()
@@ -683,7 +700,7 @@ class TwitchBridge(commands.Cog):
     @commands.guild_only()
     @commands.command(name="twitchannounce")
     async def twitchannounce(self, ctx, destination: str, *, message: str):
-        """Send plain text to twitch, discord, or both (bot owner only)."""
+        """Send a Twitch announcement banner and/or Discord message (owner only)."""
         destination = destination.lower()
         if destination not in ("twitch", "discord", "both"):
             await ctx.send("Choose twitch, discord, or both.")
@@ -697,7 +714,7 @@ class TwitchBridge(commands.Cog):
         results = []
         if destination in ("twitch", "both"):
             try:
-                await self._send_twitch(ctx.guild.id, message)
+                await self._send_twitch(ctx.guild.id, message, announcement=True)
                 results.append("Twitch: sent")
             except BridgeError as exc:
                 results.append(f"Twitch: {exc}")
@@ -712,3 +729,14 @@ class TwitchBridge(commands.Cog):
                 except discord.HTTPException:
                     results.append("Discord: delivery failed; check channel permissions")
         await ctx.send("\n".join(results), allowed_mentions=discord.AllowedMentions.none())
+
+
+    @twitchset.command(name="announcementcolor")
+    async def announcement_color(self, ctx, color: str):
+        """Choose primary, blue, green, orange, or purple for Twitch banners."""
+        color = color.lower()
+        if color not in ("primary", "blue", "green", "orange", "purple"):
+            await ctx.send("Choose primary, blue, green, orange, or purple.")
+            return
+        await self.config.guild(ctx.guild).announcement_color.set(color)
+        await ctx.send(f"Twitch announcement color set to {color}.")

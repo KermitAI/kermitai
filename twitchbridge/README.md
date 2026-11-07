@@ -15,7 +15,7 @@ it is not used by this device flow. Copy the Client ID.
 
 Use a dedicated Twitch account for Paimon's bot authorization. The broadcaster
 account is authorized separately to verify ownership of the channel being linked.
-The bot requests `user:read:chat` and `user:write:chat`; broadcaster identity
+The bot requests `user:read:chat`, `user:write:chat`, and `moderator:manage:announcements`; broadcaster identity
 approval requests only `user:read:chat`. Bot tokens are stored in Red
 Config on the VPS; broadcaster tokens are discarded after identity verification.
 A later milestone will request additional broadcaster permissions when needed.
@@ -32,7 +32,8 @@ In Discord, replace `[p]` with your normal prefix (for example `.`):
 ```
 
 Approve the private link as Paimon's Twitch bot account to grant chat-writing
-permission. Existing broadcaster and log-channel settings are preserved; no need
+and announcement permission. Make Paimon a moderator in your Twitch channel
+using `/mod PAIMON_TWITCH_USERNAME` as the broadcaster. Existing broadcaster and log-channel settings are preserved; no need
 to re-link your broadcaster. Existing read-only approval continues to support
 logging, but cannot send replies. If installing for the first time, use
 `[p]cog install <repo-name> twitchbridge` and `[p]load twitchbridge` instead.
@@ -196,7 +197,7 @@ server. Custom commands are standalone responses, independent of the Tags cog.
 - Paimon's own Twitch messages are logged but never executed as commands. Messages
   from other channels in a Shared Chat session cannot trigger custom commands.
 - A separate 100-item command queue keeps reply delivery out of the EventSub
-  receive loop. Twitch sends are serialized at least 1.6 seconds apart globally.
+  receive loop. Twitch sends are serialized at least 2.1 seconds apart globally.
   Twitch API failures and dropped messages are reported through status; sends are
   never automatically retried to avoid duplicate output.
 - `[p]twitchset disconnect` removes the broadcaster/log mapping and pauses the
@@ -213,8 +214,16 @@ Select a Discord destination, then send a message as the bot:
 [p]twitchannounce both We are starting soon!
 ```
 
-These are ordinary plain-text chat messages, not Twitch's colored `/announce`
-banners. They require bot-owner access. The maximum is 500 characters for all
+Twitch destinations use Twitch's native announcement banner. Discord receives an
+ordinary text message. They require bot-owner access. Paimon's Twitch account must
+be a channel moderator (or the broadcaster) and must approve the announcement scope
+using `[p]twitchset authbot` after this update. Missing permission fails explicitly;
+there is no fallback to a normal Twitch message.
+
+Choose the Twitch banner color with `[p]twitchset announcementcolor purple`.
+Supported colors: `primary` (default, channel accent), `blue`, `green`, `orange`,
+`purple`. Twitch accepts one announcement every two seconds; the shared send lock
+spaces outbound messages by 2.1 seconds. The maximum is 500 characters for all
 three destinations. `both` reports each platform separately: success on one does
 not imply success on the other. Discord sends disable mentions and link previews.
 Twitch messages use the dedicated bot account. Twitch's shared-chat behavior may
