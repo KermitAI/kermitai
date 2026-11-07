@@ -3,8 +3,8 @@
     "LadyLeigh"
   ],
   "name": "TwitchBridge",
-  "short": "Custom Twitch connections and Discord chat logs.",
-  "description": "Owner-controlled broadcaster linking, device authorization, EventSub connection management, and queued Twitch chat logging.",
+  "short": "Twitch connections, shared commands, announcements and chat logs.",
+  "description": "Owner-controlled broadcaster linking, device authorization, EventSub logging, standalone custom commands shared with Discord, and plain-text announcements.",
   "min_bot_version": "3.5.0",
   "requirements": [
     "aiohttp>=3.9.0,<4"

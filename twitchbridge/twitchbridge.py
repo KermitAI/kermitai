@@ -1,18 +1,20 @@
-"""First milestone: owner-managed Twitch authorization and chat logging."""
+"""Owner-managed Twitch chat, shared commands and announcements."""
 import asyncio
 import contextlib
 import time
+from collections import OrderedDict
 
 import aiohttp
 import discord
 from redbot.core import Config, commands
 
-from .policy import RecentMessages, log_line, login_name, reconnect_url
+from .policy import (RecentMessages, log_line, login_name, reconnect_url, command_name,
+                     chat_text, render_response, parse_command, twitch_level, command_allowed)
 
 BASE = "https://api.twitch.tv/helix/"
 AUTH = "https://id.twitch.tv/oauth2/"
 SOCKET = "wss://eventsub.wss.twitch.tv/ws"
-SCOPES = "user:read:chat"
+SCOPES = "user:read:chat user:write:chat"
 
 
 class BridgeError(Exception):
@@ -27,7 +29,8 @@ class TwitchBridge(commands.Cog):
         self.config = Config.get_conf(self, identifier=981376420016, force_registration=True)
         self.config.register_global(bot_auth={})
         self.config.register_guild(broadcaster="", broadcaster_id="", broadcaster_auth={},
-                                   chatlog=None, enabled=False)
+                                   chatlog=None, enabled=False, custom_commands={},
+                                   announcements=None, command_prefix="!")
         self.http = None
         self.runner = None
         self.sender = None
@@ -41,15 +44,24 @@ class TwitchBridge(commands.Cog):
         self.delivery_status = "No messages delivered yet"
         self.dropped = 0
         self.closing = False
+        self.command_queue = asyncio.Queue(maxsize=100)
+        self.command_worker = None
+        self.command_status = "No commands sent yet"
+        self.command_dropped = 0
+        self.command_locks = {}
+        self.cooldowns = OrderedDict()
+        self.send_lock = asyncio.Lock()
+        self.last_send = 0.0
 
     async def cog_load(self):
         self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
         self.sender = asyncio.create_task(self._deliver())
+        self.command_worker = asyncio.create_task(self._command_loop())
         self.runner = asyncio.create_task(self._run())
 
     async def cog_unload(self):
         self.closing = True
-        tasks = [self.runner, self.sender, *self.auth_tasks.values()]
+        tasks = [self.runner, self.sender, self.command_worker, *self.auth_tasks.values()]
         for task in tasks:
             if task:
                 task.cancel()
@@ -102,6 +114,7 @@ class TwitchBridge(commands.Cog):
                         or data.get("user_id") != auth["user_id"]
                         or "user:read:chat" not in data.get("scopes", [])):
                     raise BridgeError("Bot authorization is invalid; run twitchset authbot.")
+                auth["scopes"] = data.get("scopes", [])
                 auth["validated_at"] = time.time()
                 await self.config.bot_auth.set(auth)
             return client_id, auth
@@ -118,13 +131,14 @@ class TwitchBridge(commands.Cog):
         """Approval link and completion messages only go to the initiating owner."""
         try:
             client_id = await self._client_id()
+            requested_scopes = SCOPES if guild_id is None else "user:read:chat"
             code, device = await self._request("POST", AUTH + "device", data={
-                "client_id": client_id, "scopes": SCOPES,
+                "client_id": client_id, "scopes": requested_scopes,
             })
             if code != 200:
                 raise BridgeError("Device authorization failed. Check the public Twitch application client ID.")
             await user.send(
-                f"Authorize **{expected or 'Paimonâ€™s bot account'}** on Twitch. "
+                f"Authorize **{expected or 'PaimonÃ¢â‚¬â„¢s bot account'}** on Twitch. "
                 f"Check the signed-in account before approving.\n{device['verification_uri']}\n"
                 f"Code: `{device['user_code']}`. This expires shortly. Do not share this link."
             )
@@ -134,7 +148,7 @@ class TwitchBridge(commands.Cog):
                 await asyncio.sleep(interval)
                 code, data = await self._request("POST", AUTH + "token", data={
                     "client_id": client_id, "device_code": device["device_code"],
-                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code", "scopes": SCOPES,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code", "scopes": requested_scopes,
                 })
                 if code == 200:
                     break
@@ -152,7 +166,7 @@ class TwitchBridge(commands.Cog):
                 "Authorization": "OAuth " + token_data["access_token"],
             })
             if (code != 200 or identity.get("client_id") != client_id
-                    or "user:read:chat" not in identity.get("scopes", [])):
+                    or not set(requested_scopes.split()).issubset(identity.get("scopes", []))):
                 raise BridgeError("Twitch could not verify this authorization.")
             if expected and identity.get("login", "").lower() != expected:
                 raise BridgeError("The approved Twitch account did not match the configured broadcaster. Nothing was linked.")
@@ -160,7 +174,7 @@ class TwitchBridge(commands.Cog):
                     "login": identity["login"], "access_token": token_data["access_token"],
                     "refresh_token": token_data["refresh_token"],
                     "expires_at": time.time() + token_data["expires_in"],
-                    "validated_at": time.time()}
+                    "validated_at": time.time(), "scopes": identity.get("scopes", [])}
             async with self.settings_lock:
                 if guild_id is None:
                     async with self.token_lock:
@@ -194,11 +208,11 @@ class TwitchBridge(commands.Cog):
                 settings = await self.config.all_guilds()
                 client_id = await self._client_id()
                 routes = {str(gid): cfg for gid, cfg in settings.items()
-                          if cfg["enabled"] and cfg["chatlog"] and cfg["broadcaster_id"]
+                          if cfg["enabled"] and cfg["broadcaster_id"]
                           and cfg["broadcaster_auth"].get("client_id") == client_id
                           and self.bot.get_guild(gid) is not None}
                 if not routes:
-                    self.status = "Waiting for an authorized broadcaster, chat-log channel, and enabled setting"
+                    self.status = "Waiting for an authorized broadcaster and enabled setting"
                     return
                 client_id, auth = await self._token()
                 self.status = "Connecting"
@@ -231,7 +245,7 @@ class TwitchBridge(commands.Cog):
                 }, "transport": {"method": "websocket", "session_id": session["id"]}})
                 if code != 202:
                     raise BridgeError(f"Twitch refused a chat subscription (HTTP {code}); check bot authorization.")
-            self.status = f"Connected; logging {len(routes)} Twitch channel(s)"
+            self.status = f"Connected to {len(routes)} Twitch channel(s)"
             while True:
                 message = await ws.receive_json(timeout=timeout + 5)
                 kind = message["metadata"]["message_type"]
@@ -273,12 +287,25 @@ class TwitchBridge(commands.Cog):
         for gid, cfg in routes.items():
             if cfg["broadcaster_id"] != event.get("broadcaster_user_id"):
                 continue
-            item = (int(gid), cfg["broadcaster_id"], cfg["chatlog"],
-                    log_line(event, message["metadata"].get("message_timestamp", "")))
-            try:
-                self.queue.put_nowait(item)
-            except asyncio.QueueFull:
-                self.dropped += 1
+            if cfg.get("chatlog"):
+                item = (int(gid), cfg["broadcaster_id"], cfg["chatlog"],
+                        log_line(event, message["metadata"].get("message_timestamp", "")))
+                try:
+                    self.queue.put_nowait(item)
+                except asyncio.QueueFull:
+                    self.dropped += 1
+            # Log bot messages, but never execute them as commands. Shared-chat
+            # messages originating in another channel must not trigger commands.
+            if event.get("chatter_user_id") == bot_id:
+                continue
+            if event.get("source_broadcaster_user_id") not in (None, "", cfg["broadcaster_id"]):
+                continue
+            parsed = parse_command(event.get("message", {}).get("text", ""), cfg.get("command_prefix", "!"))
+            if parsed:
+                try:
+                    self.command_queue.put_nowait((int(gid), cfg["broadcaster_id"], event))
+                except asyncio.QueueFull:
+                    self.command_dropped += 1
 
     async def _deliver(self):
         while True:
@@ -377,14 +404,14 @@ class TwitchBridge(commands.Cog):
 
     @twitchset.command(name="enabled")
     async def enabled(self, ctx, enabled: bool):
-        """Start or pause logging for this server."""
+        """Start or pause chat logging and custom commands for this server."""
         cfg = await self.config.guild(ctx.guild).all()
-        if enabled and (not cfg["broadcaster_id"] or not cfg["chatlog"]):
-            await ctx.send("Authorize the broadcaster and configure a chat-log channel first.")
+        if enabled and not cfg["broadcaster_id"]:
+            await ctx.send("Authorize the broadcaster first.")
             return
         await self.config.guild(ctx.guild).enabled.set(enabled)
         await self._restart()
-        await ctx.send("Twitch logging enabled." if enabled else "Twitch logging paused.")
+        await ctx.send("Twitch integration enabled." if enabled else "Twitch integration paused.")
 
     @twitchset.command(name="disconnect")
     async def disconnect(self, ctx):
@@ -393,9 +420,14 @@ class TwitchBridge(commands.Cog):
         if task and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        await self.config.guild(ctx.guild).clear()
+        group = self.config.guild(ctx.guild)
+        await group.enabled.set(False)
+        await group.broadcaster.set("")
+        await group.broadcaster_id.set("")
+        await group.broadcaster_auth.set({})
+        await group.chatlog.set(None)
         await self._restart()
-        await ctx.send("This server's Twitch connection was removed. Existing Discord logs remain.")
+        await ctx.send("This server's Twitch connection was removed. Custom commands and existing Discord logs remain.")
 
     @twitchset.command(name="forgetbot")
     async def forgetbot(self, ctx):
@@ -419,6 +451,264 @@ class TwitchBridge(commands.Cog):
             f"Bot account: {auth.get('login', 'not authorized')} | Enabled: {cfg['enabled']}\n"
             f"Chat-log channel: {cfg['chatlog'] or 'not configured'}\n"
             f"Connection: {self.status}\nDelivery: {self.delivery_status}\n"
-            f"Queued: {self.queue.qsize()} | Dropped since load: {self.dropped}",
+            f"Queued logs: {self.queue.qsize()} | Dropped logs: {self.dropped}\n"
+            f"Commands: {self.command_status} | Queue: {self.command_queue.qsize()} | Dropped: {self.command_dropped}\n"
+            f"Chat writing authorized: {'user:write:chat' in auth.get('scopes', [])}",
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+
+    def _command_lock(self, guild_id):
+        return self.command_locks.setdefault(guild_id, asyncio.Lock())
+
+    async def _prepare_command(self, guild_id, name, args, platform, level, user, broadcaster_id=None):
+        async with self._command_lock(guild_id):
+            cfg = await self.config.guild_from_id(guild_id).all()
+            if not cfg["enabled"] or (broadcaster_id is not None and cfg["broadcaster_id"] != broadcaster_id):
+                return None
+            record = cfg.get("custom_commands", {}).get(name)
+            if not record or not command_allowed(record, platform, level):
+                return None
+            key = (guild_id, name)
+            now = time.monotonic()
+            if now < self.cooldowns.get(key, 0):
+                return None
+            text = render_response(record["response"], user=user, args=args, channel=cfg["broadcaster"])
+            self.cooldowns[key] = now + record.get("cooldown", 5)
+            # Discard only expired entries; active cooldowns must not be evicted.
+            for old in list(self.cooldowns):
+                if self.cooldowns[old] <= now:
+                    self.cooldowns.pop(old, None)
+            return text
+
+    async def _send_twitch(self, guild_id, text, expected_broadcaster=None):
+        text = chat_text(text)
+        # Stay below the normal 20 messages/30 sec chat limit across all channels.
+        async with self.send_lock:
+            await asyncio.sleep(max(0, self.last_send + 1.6 - time.monotonic()))
+            cfg = await self.config.guild_from_id(guild_id).all()
+            if not cfg["enabled"] or not cfg["broadcaster_id"]:
+                raise BridgeError("The Twitch connection is paused or not configured.")
+            if expected_broadcaster is not None and cfg["broadcaster_id"] != expected_broadcaster:
+                raise BridgeError("The broadcaster changed before this message could be sent.")
+            client_id, auth = await self._token()
+            if cfg["broadcaster_auth"].get("client_id") != client_id:
+                raise BridgeError("Authorize the broadcaster for this application first.")
+            if "user:write:chat" not in auth.get("scopes", []):
+                raise BridgeError("Chat writing needs approval. Run twitchset authbot again as Paimon's Twitch account.")
+            self.last_send = time.monotonic()
+            code, data = await self._request("POST", BASE + "chat/messages", headers={
+                "Client-Id": client_id, "Authorization": "Bearer " + auth["access_token"],
+            }, json={"broadcaster_id": cfg["broadcaster_id"], "sender_id": auth["user_id"], "message": text})
+            # Do not retry sends automatically: a timed-out request may have succeeded.
+            if code != 200:
+                raise BridgeError(f"Twitch did not accept the chat request (HTTP {code}).")
+            results = data.get("data", [])
+            if not results or not results[0].get("is_sent"):
+                raise BridgeError("Twitch dropped the message. Check moderation, duplicate text and chat restrictions.")
+            self.command_status = "Last Twitch message sent successfully"
+            return results[0].get("message_id")
+
+    async def _command_loop(self):
+        while True:
+            guild_id, broadcaster_id, event = await self.command_queue.get()
+            try:
+                cfg = await self.config.guild_from_id(guild_id).all()
+                parsed = parse_command(event.get("message", {}).get("text", ""), cfg.get("command_prefix", "!"))
+                if not parsed:
+                    continue
+                text = await self._prepare_command(guild_id, *parsed, "twitch", twitch_level(event),
+                                                   event.get("chatter_user_name", "viewer"), broadcaster_id)
+                if text:
+                    await self._send_twitch(guild_id, text, expected_broadcaster=broadcaster_id)
+            except (BridgeError, ValueError) as exc:
+                self.command_status = str(exc)
+            finally:
+                self.command_queue.task_done()
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.author.bot or not message.guild:
+            return
+        if await self.bot.cog_disabled_in_guild(self, message.guild):
+            return
+        if not await self.bot.message_eligible_as_command(message):
+            return
+        ctx = await self.bot.get_context(message)
+        if ctx.valid:
+            return  # Never shadow a registered Discord command.
+        prefixes = await self.bot.get_valid_prefixes(message.guild)
+        prefix = next((p for p in sorted(prefixes, key=len, reverse=True) if message.content.startswith(p)), None)
+        parsed = parse_command(message.content, prefix)
+        if not parsed:
+            return
+        owner = await self.bot.is_owner(message.author)
+        level = 2 if owner or message.author.id == message.guild.owner_id else 0
+        if level == 0 and (message.author.guild_permissions.manage_guild or await self.bot.is_mod(message.author)):
+            level = 1
+        try:
+            text = await self._prepare_command(message.guild.id, *parsed, "discord", level, message.author.display_name)
+            if text:
+                await message.channel.send(text, allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
+        except (ValueError, discord.HTTPException) as exc:
+            self.command_status = str(exc) if isinstance(exc, ValueError) else "Discord command reply failed"
+
+    @commands.is_owner()
+    @commands.guild_only()
+    @commands.group(name="twitchcommand", invoke_without_command=True)
+    async def twitchcommand(self, ctx):
+        """Manage this server's standalone shared commands (bot owner only)."""
+        await ctx.send_help()
+
+    @twitchcommand.command(name="add")
+    async def command_add(self, ctx, name: str, *, response: str):
+        """Add a Twitch command; default permission everyone, cooldown 5 seconds."""
+        try:
+            name, response = command_name(name), chat_text(response)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        if self.bot.get_command(name):
+            await ctx.send("That name belongs to a registered Discord command; choose another name.")
+            return
+        async with self._command_lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).custom_commands() as records:
+                if name in records:
+                    await ctx.send("That command exists. Use twitchcommand edit.")
+                    return
+                if len(records) >= 250:
+                    await ctx.send("This server already has 250 custom commands.")
+                    return
+                records[name] = {"response": response, "platform": "twitch", "permission": "everyone", "cooldown": 5}
+        await ctx.send(f"Command `{name}` added for Twitch. Use twitchcommand platform to enable it in Discord too.")
+
+    async def _edit_command(self, ctx, name, field, value):
+        try:
+            name = command_name(name)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        async with self._command_lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).custom_commands() as records:
+                if name not in records:
+                    await ctx.send("Command not found.")
+                    return
+                records[name][field] = value
+        await ctx.send(f"Command `{name}` updated.")
+
+    @twitchcommand.command(name="edit")
+    async def command_edit(self, ctx, name: str, *, response: str):
+        """Replace a command's response."""
+        try:
+            response = chat_text(response)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        await self._edit_command(ctx, name, "response", response)
+
+    @twitchcommand.command(name="platform")
+    async def command_platform(self, ctx, name: str, platform: str):
+        """Choose twitch, discord, or both."""
+        platform = platform.lower()
+        if platform not in ("twitch", "discord", "both"):
+            await ctx.send("Choose twitch, discord, or both.")
+            return
+        await self._edit_command(ctx, name, "platform", platform)
+
+    @twitchcommand.command(name="permission")
+    async def command_permission(self, ctx, name: str, permission: str):
+        """Choose everyone, moderator, or broadcaster."""
+        permission = permission.lower()
+        if permission not in ("everyone", "moderator", "broadcaster"):
+            await ctx.send("Choose everyone, moderator, or broadcaster.")
+            return
+        await self._edit_command(ctx, name, "permission", permission)
+
+    @twitchcommand.command(name="cooldown")
+    async def command_cooldown(self, ctx, name: str, seconds: int):
+        """Set a server-wide command cooldown of 0-86400 seconds."""
+        if not 0 <= seconds <= 86400:
+            await ctx.send("Choose 0-86400 seconds.")
+            return
+        await self._edit_command(ctx, name, "cooldown", seconds)
+
+    @twitchcommand.command(name="remove", aliases=["delete"])
+    async def command_remove(self, ctx, name: str):
+        """Delete a custom command."""
+        try:
+            name = command_name(name)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        async with self._command_lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).custom_commands() as records:
+                removed = records.pop(name, None)
+            self.cooldowns.pop((ctx.guild.id, name), None)
+        await ctx.send("Command removed." if removed else "Command not found.")
+
+    @twitchcommand.command(name="list")
+    async def command_list(self, ctx):
+        """List names, platforms, permissions and cooldowns."""
+        records = await self.config.guild(ctx.guild).custom_commands()
+        lines = [f"{name}: {r['platform']} | {r['permission']} | {r['cooldown']}s" for name, r in sorted(records.items())]
+        if not lines:
+            await ctx.send("No custom commands configured.")
+        for start in range(0, len(lines), 15):
+            await ctx.send("\n".join(lines[start:start + 15]), allowed_mentions=discord.AllowedMentions.none())
+
+    @twitchset.command(name="announcements")
+    async def announcement_channel(self, ctx, channel: discord.TextChannel):
+        """Select this server's Discord announcement destination."""
+        if channel.guild.id != ctx.guild.id:
+            await ctx.send("Choose a text channel in this server.")
+            return
+        permissions = channel.permissions_for(ctx.guild.me)
+        if not permissions.view_channel or not permissions.send_messages:
+            await ctx.send("I need View Channel and Send Messages there.")
+            return
+        await self.config.guild(ctx.guild).announcements.set(channel.id)
+        await ctx.send("Discord announcement channel saved.")
+
+    @twitchset.command(name="prefix")
+    async def twitch_prefix(self, ctx, prefix: str):
+        """Choose a Twitch trigger prefix (1-5 punctuation characters)."""
+        if not 1 <= len(prefix) <= 5 or any(c.isalnum() or not 33 <= ord(c) <= 126 for c in prefix):
+            await ctx.send("Use 1-5 punctuation characters, such as !.")
+            return
+        await self.config.guild(ctx.guild).command_prefix.set(prefix)
+        await self._restart()
+        await ctx.send("Twitch command prefix updated.")
+
+    @commands.is_owner()
+    @commands.guild_only()
+    @commands.command(name="twitchannounce")
+    async def twitchannounce(self, ctx, destination: str, *, message: str):
+        """Send plain text to twitch, discord, or both (bot owner only)."""
+        destination = destination.lower()
+        if destination not in ("twitch", "discord", "both"):
+            await ctx.send("Choose twitch, discord, or both.")
+            return
+        try:
+            message = chat_text(message)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        cfg = await self.config.guild(ctx.guild).all()
+        results = []
+        if destination in ("twitch", "both"):
+            try:
+                await self._send_twitch(ctx.guild.id, message)
+                results.append("Twitch: sent")
+            except BridgeError as exc:
+                results.append(f"Twitch: {exc}")
+        if destination in ("discord", "both"):
+            channel = ctx.guild.get_channel(cfg.get("announcements")) if cfg.get("announcements") else None
+            if not isinstance(channel, discord.TextChannel):
+                results.append("Discord: configure twitchset announcements first")
+            else:
+                try:
+                    await channel.send(message, allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
+                    results.append("Discord: sent")
+                except discord.HTTPException:
+                    results.append("Discord: delivery failed; check channel permissions")
+        await ctx.send("\n".join(results), allowed_mentions=discord.AllowedMentions.none())

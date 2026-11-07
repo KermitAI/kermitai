@@ -49,3 +49,49 @@ def log_line(event, timestamp):
     name = clean(event.get("chatter_user_name", event.get("chatter_user_login", "unknown")))
     text = clean(event.get("message", {}).get("text", ""))
     return f"[{stamp}] {name}: {text}"[:1900]
+
+
+RESERVED_COMMANDS = {"twitchset", "twitchcommand", "twitchannounce"}
+
+
+def command_name(value):
+    value = value.lower().lstrip("!")
+    if not re.fullmatch(r"[a-z0-9_]{1,32}", value) or value in RESERVED_COMMANDS:
+        raise ValueError("Use a command name of 1-32 letters, numbers or underscores (without a prefix).")
+    return value
+
+
+def chat_text(value):
+    value = " ".join(value.split())
+    if not value or len(value) > 500 or any(ord(c) < 32 for c in value):
+        raise ValueError("Messages must contain 1-500 characters after whitespace is normalized.")
+    return value
+
+
+def render_response(template, *, user, args, channel):
+    # One pass: user-supplied arguments cannot introduce additional substitutions.
+    values = {"user": user, "args": args, "channel": channel}
+    text = re.sub(r"\{(user|args|channel)\}", lambda match: values[match[1]], template)
+    return chat_text(text)
+
+
+def parse_command(text, prefix):
+    if not prefix or not text.startswith(prefix):
+        return None
+    parts = text[len(prefix):].split(maxsplit=1)
+    if not parts:
+        return None
+    return parts[0].lower(), parts[1] if len(parts) > 1 else ""
+
+
+def twitch_level(event):
+    if event.get("chatter_user_id") and event.get("chatter_user_id") == event.get("broadcaster_user_id"):
+        return 2
+    return 1 if any(badge.get("set_id") == "moderator" for badge in event.get("badges", [])) else 0
+
+
+def command_allowed(record, platform, level):
+    required = {"everyone": 0, "moderator": 1, "broadcaster": 2}
+    return (record.get("platform", "twitch") in (platform, "both")
+            and record.get("permission", "everyone") in required
+            and level >= required[record.get("permission", "everyone")])
