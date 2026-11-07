@@ -24,13 +24,38 @@ class TextChannel:
         pass
 
 
+class UIItem:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+        self.value = ""
+
+    def __str__(self):
+        return self.value
+
+
+class UIView:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+        self.children = []
+        self.stopped = False
+
+    def add_item(self, item):
+        self.children.append(item)
+
+    def stop(self):
+        self.stopped = True
+
+
 root = Path(__file__).parents[1]
 pkg = types.ModuleType("bridge_test_package")
 pkg.__path__ = [str(root)]
-commands = types.SimpleNamespace(Cog=type("Cog", (), {"listener": staticmethod(decorator)}), is_owner=decorator, guild_only=decorator, group=decorator, command=decorator)
+commands = types.SimpleNamespace(Cog=type("Cog", (), {"listener": staticmethod(decorator)}), is_owner=decorator, guild_only=decorator, group=decorator, command=decorator, mod_or_permissions=decorator)
 modules = {
     "bridge_test_package": pkg,
-    "discord": types.SimpleNamespace(TextChannel=TextChannel, HTTPException=HTTPException,
+    "discord": types.SimpleNamespace(TextChannel=TextChannel, Role=object, HTTPException=HTTPException, NotFound=type("NotFound", (HTTPException,), {}),
+                                     utils=types.SimpleNamespace(escape_markdown=lambda text: text),
+                                     ui=types.SimpleNamespace(View=UIView, Modal=UIView, Button=UIItem, TextInput=UIItem),
+                                     ButtonStyle=types.SimpleNamespace(primary=1),
                                      AllowedMentions=types.SimpleNamespace(none=lambda: None)),
     "aiohttp": types.SimpleNamespace(ClientError=type("ClientError", (Exception,), {})),
     "redbot": types.ModuleType("redbot"),
@@ -95,7 +120,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await self.cog.config.bot_auth.set({"client_id": "client", "user_id": "bot",
             "expires_at": 0, "refresh_token": "old", "access_token": "expired"})
         self.cog._request.side_effect = [(200, {"access_token": "new", "refresh_token": "rotated", "expires_in": 10000}),
-            (200, {"client_id": "client", "user_id": "bot", "scopes": ["user:read:chat", "user:write:chat", "moderator:manage:announcements"]})]
+            (200, {"client_id": "client", "user_id": "bot", "scopes": sorted(module.BOT_SCOPES | module.BROADCASTER_SCOPES)})]
         _, auth = await self.cog._token()
         self.assertEqual(auth["refresh_token"], "rotated")
         self.assertEqual((await self.cog.config.bot_auth())["access_token"], "new")
@@ -120,7 +145,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.cog._request.side_effect = [(200, {"verification_uri": "https://www.twitch.tv/activate",
             "user_code": "code", "device_code": "device", "interval": 1, "expires_in": 60}),
             (200, {"access_token": "token", "refresh_token": "refresh", "expires_in": 100}),
-            (200, {"client_id": "client", "login": "imposter", "user_id": "999", "scopes": ["user:read:chat", "user:write:chat", "moderator:manage:announcements"]})]
+            (200, {"client_id": "client", "login": "imposter", "user_id": "999", "scopes": sorted(module.BOT_SCOPES | module.BROADCASTER_SCOPES)})]
         user = types.SimpleNamespace(send=AsyncMock())
         with patch.object(module.asyncio, "sleep", new=AsyncMock()):
             await self.cog._authorize(user, 1, "expected")
@@ -132,7 +157,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             "user_code": "code", "device_code": "device", "interval": 1, "expires_in": 60}),
             (400, {"message": "authorization_pending"}),
             (200, {"access_token": "token", "refresh_token": "refresh", "expires_in": 100}),
-            (200, {"client_id": "client", "login": "paimon", "user_id": "bot", "scopes": ["user:read:chat", "user:write:chat", "moderator:manage:announcements"]})]
+            (200, {"client_id": "client", "login": "paimon", "user_id": "bot", "scopes": sorted(module.BOT_SCOPES | module.BROADCASTER_SCOPES)})]
         user = types.SimpleNamespace(send=AsyncMock())
         with patch.object(module.asyncio, "sleep", new=AsyncMock()):
             await self.cog._authorize(user)
@@ -198,6 +223,15 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.cog._notification(self.message, self.routes, "bot")
         self.assertEqual(self.cog.command_queue.qsize(), 1)
         self.assertTrue(self.cog.queue.empty())
+
+
+    def test_verification_code_is_redacted_in_discord_log(self):
+        self.message["payload"]["event"].update(chatter_user_id="viewer", message={"text": "!link SECRET_CODE"})
+        self.cog._notification(self.message, self.routes, "bot")
+        log = self.cog.queue.get_nowait()[3]
+        self.assertNotIn("SECRET_CODE", log)
+        self.assertIn("verification", log)
+        self.assertEqual(self.cog.command_queue.qsize(), 1)
 
 
 class PolicyTests(unittest.TestCase):

@@ -3,7 +3,8 @@
 Custom Red 3.5+ cog for owner-only Twitch broadcaster/server mapping, private device
 approval, bot-token refresh and validation, EventSub chat reception, and Discord
 chat logs, standalone shared custom commands, and announcements. No dependency on
-Tags or Crates. Crate redemptions, member linking and role sync are later milestones.
+Tags or Crates. Includes verified member linking, per-broadcaster role syncing and
+shoutout follow messages. Crate redemptions and inventory merging remain deferred.
 
 ## 1. Register the Twitch application
 
@@ -15,10 +16,33 @@ it is not used by this device flow. Copy the Client ID.
 
 Use a dedicated Twitch account for Paimon's bot authorization. The broadcaster
 account is authorized separately to verify ownership of the channel being linked.
-The bot requests `user:read:chat`, `user:write:chat`, and `moderator:manage:announcements`; broadcaster identity
-approval requests only `user:read:chat`. Bot tokens are stored in Red
-Config on the VPS; broadcaster tokens are discarded after identity verification.
-A later milestone will request additional broadcaster permissions when needed.
+Authorization requests a fixed permission bundle up front, so role mapping and
+planned features do not each require another approval. Twitch still binds each
+token to the account approving it; a bot account cannot grant broadcaster access.
+
+- Bot bundle: `user:read:chat`, `user:write:chat`,
+  `moderator:manage:announcements`, `moderator:manage:shoutouts`, `user:bot`.
+- Broadcaster bundle: `user:read:chat`, `moderation:read`,
+  `channel:read:subscriptions`, `channel:read:vips`, `channel:bot`,
+  `channel:read:redemptions`, `channel:manage:redemptions`.
+
+These cover current and already-planned Paimon capabilities. Native shoutout-card
+and redemption permissions are reserved; these integrations remain deferred.
+This is not a wildcard for every Twitch API permission. A new scope or revoked
+access can still require approval. Bot and broadcaster tokens are stored in Red
+Config on the VPS. One broadcaster approval also supplies role-sync authorization.
+
+After upgrading an existing installation, approve each account once:
+
+```
+[p]twitchset authbot
+[p]twitchset authorize
+```
+
+Approve the first as Paimon's Twitch bot account and the second as the selected
+broadcaster. `twitchroles authorize` uses the same complete broadcaster bundle.
+Role mappings no longer change the requested scopes. Existing read-only tokens
+continue to work until a feature needs the additional permissions.
 
 ## Updating through your connected GitHub repository
 
@@ -125,7 +149,10 @@ use simulated Twitch/Discord responses; they do not substitute for this live che
 - `[p]twitchset status` shows connection state, last delivery outcome, queue depth,
   and a dropped-message counter. Global connection/delivery health covers all
   configured servers; broadcaster/channel settings are specific to the current server.
-- `[p]twitchset disconnect` removes the current server mapping and pending approval.
+- `[p]twitchset disconnect` removes the current server mapping and pending approval, pauses role sync,
+  forgets role-sync tokens and attempts to clean integration-granted roles. Member
+  identity links and custom commands remain; role mappings must be authorized for
+  the next broadcaster before syncing again.
 - `[p]twitchset forgetbot` clears the saved bot authorization for **all servers**.
   Revoke app permissions in Twitch Connections as well to revoke access at Twitch.
 - Reloading/unloading cancels pending approvals and closes sockets and HTTP sessions.
@@ -247,3 +274,204 @@ also show bot messages to other channels participating in that shared session.
 ```
 python -B -m unittest discover -s twitchbridge/tests -v
 ```
+
+
+## Verified member linking (no crate changes)
+
+Members run these commands in the Discord server linked to the broadcaster:
+
+```
+[p]twitchlink THEIR_TWITCH_USERNAME
+[p]twitchlink status
+[p]twitchlink unlink
+```
+
+The bot resolves the permanent Twitch account ID, then DMs a one-time code. The
+member signs into that Twitch account and posts `!link CODE` in the linked
+broadcaster's Twitch chat (or the configured Twitch prefix). The code expires in
+10 minutes and works only for the requesting Discord member, selected Twitch ID,
+and server/broadcaster. A copied code sent by another Twitch user cannot claim it.
+Discord membership is checked again on completion. Twitch usernames can change;
+identity is anchored to the permanent ID. Repeat setup after a rename if necessary
+for the displayed username. One-to-one links are enforced separately per server.
+
+Successful linking is confirmed by DM. Codes are hidden in the mirrored Discord
+log, although verification messages remain visible in Twitch chat. Twitch may
+block repeated messages or filter chat; ensure the verification message actually
+appears. Requests have a 15-second per-member delay and a 1,000-pending-request
+limit. Codes are memory-only; reload cancels unfinished verification.
+
+Unlink cancels pending requests, removes the identity association and attempts to
+remove only roles granted by this integration. Failed removals remain tracked and
+are retried by periodic cleanup. No crate method is called: existing Twitch and
+Discord inventories are neither read nor merged in this update.
+
+## Per-broadcaster role synchronization
+
+Configure each linked Discord server independently, as bot owner:
+
+```
+[p]twitchroles map moderator @Twitch-Moderator
+[p]twitchroles map subscriber @Twitch-Subscriber
+[p]twitchroles map vip @Twitch-VIP
+[p]twitchroles map broadcaster @Broadcaster
+[p]twitchroles authorize
+[p]twitchroles enabled true
+[p]twitchroles sync
+[p]twitchroles status
+```
+
+Choose only the mappings you need. The authorization DM must be approved by that
+server's verified Twitch broadcaster. It uses the complete broadcaster bundle
+listed above. Broadcaster mapping uses the verified broadcaster ID. Adding or
+removing these mappings no longer changes the approval requirements.
+Subscriber queries require a channel with Twitch subscriptions available; otherwise
+leave the subscriber mapping out. This is independent of Discord's native Twitch
+integration: choose separate roles to avoid two systems managing the same role.
+
+Only verified linked members qualify. The bot polls every 15 minutes; `sync` checks
+immediately. Enable Discord's Server Members intent for reliable member caching;
+the cog fetches individual members on cache misses. Paimon requires Manage Roles
+and a highest role above mapped roles. Administrator, managed and everyone roles
+are rejected. This copies status from Twitch into Discord only.
+
+Twitch tokens are validated and refreshed, and all configured status lookups must
+succeed before status-based role changes occur. Missing scopes, API outages or
+invalid broadcaster approval leave existing qualifying-status grants unchanged.
+The integration tracks roles it actually adds. Pre-existing manually assigned
+roles are not claimed and will not be removed by synchronization. If two statuses
+map to the same role, either status is sufficient to retain the role. Avoid manually
+reassigning integration-owned roles if you want independent ownership.
+
+```
+[p]twitchroles unmap subscriber
+[p]twitchroles enabled false
+[p]twitchroles cleanup
+```
+
+Removing a mapping removes tracked grants on the next enabled successful sync;
+removing all mappings triggers cleanup on that check. Pausing sync preserves linked
+members' roles. `cleanup` pauses sync and attempts to remove all integration-owned
+roles. Hierarchy/permission failures remain tracked; fix permissions and repeat.
+Changing/disconnecting a broadcaster also attempts cleanup and pauses role sync.
+Verified member identities remain, while new broadcaster status access requires
+fresh authorization. Settings and grants are persisted; immediate changes can take
+up to the next polling cycle unless you run `sync` yourself.
+
+Red user-data deletion removes member links, pending challenges and tracking IDs,
+and attempts role removal. If role cleanup fails during a deletion request, the
+tracking ID is still erased for privacy; an administrator must remove that role
+manually. Existing mirrored Discord log messages have their own retention.
+
+## Shoutout follow messages
+
+In Twitch, moderators and the broadcaster can run:
+
+```
+!so luna
+!shoutout https://twitch.tv/luna
+```
+
+In Discord, Red moderators, members with Manage Server, and bot/server owners can
+run `[p]twitchshoutout luna`. It sends the follow message to the linked Twitch chat
+and confirms delivery in Discord. Linking the target's Discord account is not
+required. Twitch account lookup confirms the canonical username and constructs the
+URL; external domains, extra paths and URL query strings are rejected.
+
+Configure the per-server message and cooldown as bot owner:
+
+```
+[p]twitchset shoutoutmessage Go follow {user} at {url}!
+[p]twitchset shoutoutcooldown 60
+```
+
+The message must contain `{url}`; `{user}` is Twitch's display name and `{channel}`
+is the linked broadcaster. The same server-wide cooldown applies to Twitch and
+Discord triggers (0-86400 seconds, default 60). Messages must fit the shared
+500-character limit. This is a configurable follow message, not Twitch's native
+shoutout card or an announcement banner. `link`, `so`, and `shoutout` are reserved
+Twitch triggers; remove older custom commands with those names if needed.
+
+## Live checks for linking, roles, and shoutouts
+
+1. Push/update/reload `twitchbridge`. Existing command/log settings remain.
+2. Have a member link; post the code as a different Twitch account first and check
+   that it fails, then complete it as the requested account. Check `twitchlink status`.
+3. Confirm neither crate inventory changed. Try linking the same Twitch account
+   to another Discord member in that server; it must be rejected.
+4. Map a dedicated test role, approve broadcaster access, enable role sync and run
+   `sync`. Confirm matching linked members receive it and nonmatching ones do not.
+5. Remove the Twitch status and sync again. Only the integration-granted role
+   should be removed. An equivalent pre-existing manual role must remain.
+6. Test unlink and cleanup, reload persistence, and check `twitchroles status`.
+7. Test Twitch `!so username` as a moderator and as a regular viewer; only the
+   moderator should send a shoutout. Test the Discord command and shared cooldown.
+8. Change the shoutout template, check the canonical follow URL, and verify that
+   ordinary chat logging and native announcements still work.
+
+Additional Twitch API references:
+https://dev.twitch.tv/docs/api/reference/#get-moderators
+https://dev.twitch.tv/docs/api/reference/#get-broadcaster-subscriptions
+https://dev.twitch.tv/docs/api/reference/#get-vips
+
+
+## Member linking panel (no commands or DMs required)
+
+As bot owner, configure the text and button label, then post the panel:
+
+```
+[p]twitchroles paneltext Connect your Twitch account here to receive your server roles.
+[p]twitchroles panellabel Connect Twitch
+[p]twitchroles panel #account-linking
+```
+
+Each server has one active panel. Members click the button, enter their Twitch
+username in a modal, and receive a private Twitch approval link. After signing in
+as that account and approving, Paimon verifies the permanent Twitch ID and links
+it to the Discord member who opened the modal. A Twitch approval for another
+account fails. Members do not type commands in Discord or Twitch and do not need
+DMs enabled. The legacy `.twitchlink username` chat-code flow remains available.
+
+Panel approval requests **no Twitch action scopes**. Member access tokens are
+used once to verify identity, then revoked; neither member access tokens nor
+refresh tokens are saved. Only the verified identity link and timestamp remain.
+Crate inventories are not touched. Linked members are checked for role eligibility
+promptly when role sync is enabled; normal 15-minute checks continue afterward.
+
+Panel text supports 1-2000 characters; the button label supports 1-80. Changing text
+or label updates the existing panel. Posting a new panel deactivates the previous
+one and cancels unfinished approvals. `[p]twitchroles panelremove` deactivates it.
+A saved panel resumes after cog reload or bot restart; unfinished approvals must
+be started again. Deleted Discord panel messages can be replaced by posting a new
+panel. The bot must be able to view the channel and send/edit its own messages.
+
+Approvals expire locally after ten minutes. Changing the broadcaster, removing
+the panel, unlinking or deleting member data invalidates the pending request.
+Approvals are bound to the current Discord user, server, panel and Twitch ID.
+Link conflicts remain rejected. Pending tasks are bounded, and unlinking cancels
+both in-progress approval and older chat-code requests.
+
+Discord does not expose arbitrary members' profile connections through the bot
+API. Reading Twitch connections requires each member to authorize Discord's
+`connections` OAuth scope, which would add another login/callback service. This
+panel uses direct Twitch approval instead; it does not scrape Discord profiles.
+
+Username-only shoutouts already work: `!so luna` and `[p]twitchshoutout luna`
+resolve the Twitch username and generate `https://twitch.tv/luna`. A URL is optional.
+
+### Live checks for this update
+
+1. Update/reload the whole cog and approve the bot and broadcaster bundles once.
+2. Post the linking panel, click it as a regular member, enter the Twitch username,
+   and approve it. Check a successful private confirmation with no public code.
+3. Try approving the wrong Twitch account; it must not create a link.
+4. Disable DMs and repeat with another member; button linking should still work.
+5. Change the panel text/label, reload the cog, and check that its button still works.
+6. Remove/replace a panel during approval; the old request must not create a link.
+7. Verify role sync and username-only shoutouts. Confirm crate inventories remain
+   unchanged.
+
+References:
+https://docs.discord.com/developers/topics/oauth2#shared-resources-oauth2-scopes
+https://discordpy.readthedocs.io/en/stable/interactions/api.html#discord.ui.View
+https://discuss.dev.twitch.com/t/public-client-device-code-flow-support-for-empty-oauth-scopes/65202

@@ -4,7 +4,7 @@
   ],
   "name": "TwitchBridge",
   "short": "Twitch connections, shared commands, announcements and chat logs.",
-  "description": "Owner-controlled broadcaster linking, device authorization, EventSub logging, standalone custom commands shared with Discord, and plain-text announcements.",
+  "description": "Custom Twitch/Discord bridge with command-free persistent linking panels, verified member accounts, per-broadcaster roles, shoutouts, shared commands, native announcements and chat logs.",
   "min_bot_version": "3.5.0",
   "requirements": [
     "aiohttp>=3.9.0,<4"
@@ -13,5 +13,5 @@
     "twitch",
     "logging"
   ],
-  "end_user_data_statement": "Stores Twitch broadcaster IDs, usernames, OAuth tokens and Discord channel settings. Copies Twitch messages to configured Discord channels; no local chat archive is kept."
+  "end_user_data_statement": "Stores per-server Discord/Twitch identity links and timestamps, broadcaster and bot OAuth tokens, channel/role settings and integration-owned role grants. Pending verification codes and cooldowns are in memory. Supports member unlink and Red data deletion. Existing mirrored Discord chat logs have independent retention. Stores linking-panel message IDs and configuration. Identity-only member approval tokens are transient, revoked after use, and never saved."
 }

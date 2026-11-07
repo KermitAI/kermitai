@@ -10,18 +10,17 @@ from redbot.core import Config, commands
 
 from .policy import (RecentMessages, log_line, login_name, reconnect_url, command_name,
                      chat_text, render_response, parse_command, twitch_level, command_allowed)
+from .errors import BridgeError
+from .community import CommunityMixin, ROLE_SCOPES, DEFAULT_SHOUTOUT
+from .scopes import BOT_SCOPES, BROADCASTER_SCOPES
 
 BASE = "https://api.twitch.tv/helix/"
 AUTH = "https://id.twitch.tv/oauth2/"
 SOCKET = "wss://eventsub.wss.twitch.tv/ws"
-SCOPES = "user:read:chat user:write:chat moderator:manage:announcements"
+SCOPES = " ".join(sorted(BOT_SCOPES))
 
 
-class BridgeError(Exception):
-    """Safe error text: never includes OAuth responses or secrets."""
-
-
-class TwitchBridge(commands.Cog):
+class TwitchBridge(CommunityMixin, commands.Cog):
     """Connect Twitch broadcasters to Discord servers (bot owner only)."""
 
     def __init__(self, bot):
@@ -30,7 +29,11 @@ class TwitchBridge(commands.Cog):
         self.config.register_global(bot_auth={})
         self.config.register_guild(broadcaster="", broadcaster_id="", broadcaster_auth={},
                                    chatlog=None, enabled=False, custom_commands={},
-                                   announcements=None, command_prefix="!", announcement_color="primary")
+                                   announcements=None, command_prefix="!", announcement_color="primary",
+                                   member_links={}, role_mappings={}, role_auth={}, roles_enabled=False,
+                                   managed_roles={}, shoutout_message=DEFAULT_SHOUTOUT, shoutout_cooldown=60,
+                                   link_panel={}, link_panel_label="Link Twitch account",
+                                   link_panel_text="Link your Twitch account to receive your server roles.")
         self.http = None
         self.runner = None
         self.sender = None
@@ -52,16 +55,33 @@ class TwitchBridge(commands.Cog):
         self.cooldowns = OrderedDict()
         self.send_lock = asyncio.Lock()
         self.last_send = 0.0
+        self.pending_links = {}
+        self.link_attempts = {}
+        self.role_worker = None
+        self.role_status = {}
+        self.shoutout_cooldowns = {}
+        self.link_views = {}
+        self.link_modals = set()
+        self.member_auth_tasks = {}
+        self.pending_device_links = {}
+        self.link_generation = {}
+        self.role_wakeup = asyncio.Event()
 
     async def cog_load(self):
         self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        await self._restore_link_panels()
         self.sender = asyncio.create_task(self._deliver())
         self.command_worker = asyncio.create_task(self._command_loop())
         self.runner = asyncio.create_task(self._run())
+        self.role_worker = asyncio.create_task(self._role_loop())
 
     async def cog_unload(self):
         self.closing = True
-        tasks = [self.runner, self.sender, self.command_worker, *self.auth_tasks.values()]
+        for view in self.link_views.values():
+            view.stop()
+        for modal in list(self.link_modals):
+            modal.stop()
+        tasks = [self.runner, self.sender, self.command_worker, self.role_worker, *self.auth_tasks.values(), *self.member_auth_tasks.values()]
         for task in tasks:
             if task:
                 task.cancel()
@@ -70,14 +90,25 @@ class TwitchBridge(commands.Cog):
             await self.http.close()
 
     async def red_delete_data_for_user(self, *, requester, user_id):
-        # No member Discord IDs or member account links are stored in this milestone.
-        return
+        for guild_id in await self.config.all_guilds():
+            await self._unlink_member(guild_id, user_id)
+            async with self.settings_lock:
+                group = self.config.guild_from_id(guild_id)
+                managed = await group.managed_roles()
+                managed.pop(str(user_id), None)
+                await group.managed_roles.set(managed)
+        self.link_attempts = {k: v for k, v in self.link_attempts.items() if k[1] != user_id}
+        self.link_generation = {k: v for k, v in self.link_generation.items() if k[1] != user_id}
+        for modal in list(getattr(self, "link_modals", set())):
+            if modal.user_id == user_id:
+                modal.stop()
+                self.link_modals.discard(modal)
 
     async def _request(self, method, url, **kwargs):
         try:
             async with self.http.request(method, url, **kwargs) as response:
-                if response.status == 204:
-                    return 204, {}
+                if response.status == 204 or response.content_length == 0:
+                    return response.status, {}
                 data = await response.json(content_type=None)
                 return response.status, data
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
@@ -129,18 +160,23 @@ class TwitchBridge(commands.Cog):
             if not self.closing:
                 self.runner = asyncio.create_task(self._run())
 
-    async def _authorize(self, user, guild_id=None, expected=None):
+    async def _authorize(self, user, guild_id=None, expected=None, purpose="base"):
         """Approval link and completion messages only go to the initiating owner."""
         try:
             client_id = await self._client_id()
-            requested_scopes = SCOPES if guild_id is None else "user:read:chat"
+            requested_scopes = SCOPES if guild_id is None else " ".join(sorted(BROADCASTER_SCOPES))
+            if purpose == "roles":
+                cfg = await self.config.guild_from_id(guild_id).all()
+                if not cfg["broadcaster_id"]:
+                    raise BridgeError("Verify this server's broadcaster with twitchset authorize first.")
+                requested_scopes = " ".join(sorted(BROADCASTER_SCOPES))
             code, device = await self._request("POST", AUTH + "device", data={
                 "client_id": client_id, "scopes": requested_scopes,
             })
             if code != 200:
                 raise BridgeError("Device authorization failed. Check the public Twitch application client ID.")
             await user.send(
-                f"Authorize **{expected or 'PaimonÃ¢â‚¬â„¢s bot account'}** on Twitch. "
+                f"Authorize **{expected or 'the bot account'}** on Twitch. "
                 f"Check the signed-in account before approving.\n{device['verification_uri']}\n"
                 f"Code: `{device['user_code']}`. This expires shortly. Do not share this link."
             )
@@ -189,10 +225,16 @@ class TwitchBridge(commands.Cog):
                     for other_id, other in (await self.config.all_guilds()).items():
                         if other_id != guild_id and other["broadcaster_id"] == identity["user_id"]:
                             raise BridgeError("This broadcaster is already linked to another server.")
-                    # Broadcaster approval proves control. No broadcaster token is retained
-                    # until a later milestone needs channel-specific permissions.
-                    await group.broadcaster_id.set(identity["user_id"])
-                    await group.broadcaster_auth.set({"client_id": client_id, "login": identity["login"]})
+                    if purpose == "roles":
+                        if settings["broadcaster_id"] != identity["user_id"]:
+                            raise BridgeError("Broadcaster changed during role approval. Authorize again.")
+                        await group.role_auth.set(auth)
+                    else:
+                        await group.broadcaster_id.set(identity["user_id"])
+                        await group.broadcaster_auth.set({"client_id": client_id, "login": identity["login"]})
+                        # One broadcaster approval covers all existing role mappings
+                        # and the deferred redemption integration.
+                        await group.role_auth.set(auth)
             await self._restart()
             await user.send(f"Twitch account `{identity['login']}` verified. Run `twitchset status` in the server.")
         except (BridgeError, discord.HTTPException) as exc:
@@ -289,16 +331,20 @@ class TwitchBridge(commands.Cog):
         for gid, cfg in routes.items():
             if cfg["broadcaster_id"] != event.get("broadcaster_user_id"):
                 continue
+            parsed = parse_command(event.get("message", {}).get("text", ""), cfg.get("command_prefix", "!"))
+            log_event = event
+            if parsed and parsed[0] == "link":
+                log_event = dict(event, message={"text": "[account verification code hidden]"})
             if cfg.get("chatlog"):
                 item = (int(gid), cfg["broadcaster_id"], cfg["chatlog"],
-                        log_line(event, message["metadata"].get("message_timestamp", "")))
+                        log_line(log_event, message["metadata"].get("message_timestamp", "")))
                 try:
                     self.queue.put_nowait(item)
                 except asyncio.QueueFull:
                     self.dropped += 1
             # Log bot messages, but never execute them as commands. Shared-chat
             # messages originating in another channel must not trigger commands.
-            if event.get("chatter_user_id") == bot_id:
+            if event.get("chatter_user_id") == bot_id and (not parsed or parsed[0] != "link"):
                 continue
             if event.get("source_broadcaster_user_id") not in (None, "", cfg["broadcaster_id"]):
                 continue
@@ -352,6 +398,10 @@ class TwitchBridge(commands.Cog):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             group = self.config.guild(ctx.guild)
+            await self._cleanup_roles_locked(ctx.guild, all_roles=True)
+            await group.roles_enabled.set(False)
+            await group.role_auth.set({})
+            self.pending_links = {k: v for k, v in self.pending_links.items() if k[0] != ctx.guild.id}
             await group.broadcaster.set(broadcaster)
             await group.broadcaster_id.set("")
             await group.broadcaster_auth.set({})
@@ -359,7 +409,7 @@ class TwitchBridge(commands.Cog):
         await self._restart()
         await ctx.send(f"Broadcaster `{broadcaster}` selected. Run `{ctx.clean_prefix}twitchset authorize` to verify ownership.")
 
-    async def _start_auth(self, ctx, key, expected=None):
+    async def _start_auth(self, ctx, key, expected=None, purpose="base"):
         task = self.auth_tasks.get(key)
         if task and not task.done():
             await ctx.send("Authorization is already pending; check your DMs.")
@@ -373,7 +423,7 @@ class TwitchBridge(commands.Cog):
         except discord.HTTPException:
             await ctx.send("Enable DMs from me, then retry. No approval link was posted here.")
             return
-        self.auth_tasks[key] = asyncio.create_task(self._authorize(ctx.author, key, expected))
+        self.auth_tasks[key] = asyncio.create_task(self._authorize(ctx.author, key, expected, purpose=purpose))
         await ctx.send("Check your DMs for the Twitch approval link.")
 
     @twitchset.command(name="authbot")
@@ -411,7 +461,8 @@ class TwitchBridge(commands.Cog):
         if enabled and not cfg["broadcaster_id"]:
             await ctx.send("Authorize the broadcaster first.")
             return
-        await self.config.guild(ctx.guild).enabled.set(enabled)
+        async with self.settings_lock:
+            await self.config.guild(ctx.guild).enabled.set(enabled)
         await self._restart()
         await ctx.send("Twitch integration enabled." if enabled else "Twitch integration paused.")
 
@@ -422,12 +473,17 @@ class TwitchBridge(commands.Cog):
         if task and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        group = self.config.guild(ctx.guild)
-        await group.enabled.set(False)
-        await group.broadcaster.set("")
-        await group.broadcaster_id.set("")
-        await group.broadcaster_auth.set({})
-        await group.chatlog.set(None)
+        async with self.settings_lock:
+            await self._cleanup_roles_locked(ctx.guild, all_roles=True)
+            group = self.config.guild(ctx.guild)
+            await group.roles_enabled.set(False)
+            await group.role_auth.set({})
+            self.pending_links = {k: v for k, v in self.pending_links.items() if k[0] != ctx.guild.id}
+            await group.enabled.set(False)
+            await group.broadcaster.set("")
+            await group.broadcaster_id.set("")
+            await group.broadcaster_auth.set({})
+            await group.chatlog.set(None)
         await self._restart()
         await ctx.send("This server's Twitch connection was removed. Custom commands and existing Discord logs remain.")
 
@@ -533,6 +589,15 @@ class TwitchBridge(commands.Cog):
                 cfg = await self.config.guild_from_id(guild_id).all()
                 parsed = parse_command(event.get("message", {}).get("text", ""), cfg.get("command_prefix", "!"))
                 if not parsed:
+                    continue
+                if parsed[0] == "link":
+                    await self._complete_member_link(guild_id, broadcaster_id, event, parsed[1].strip())
+                    continue
+                if parsed[0] in ("so", "shoutout"):
+                    if twitch_level(event) >= 1:
+                        # Recheck the queued route before resolving/sending a shoutout.
+                        if cfg["broadcaster_id"] == broadcaster_id and cfg["enabled"]:
+                            await self._shoutout(guild_id, parsed[1].strip(), expected_broadcaster=broadcaster_id)
                     continue
                 text = await self._prepare_command(guild_id, *parsed, "twitch", twitch_level(event),
                                                    event.get("chatter_user_name", "viewer"), broadcaster_id)
@@ -652,11 +717,7 @@ class TwitchBridge(commands.Cog):
     @twitchcommand.command(name="remove", aliases=["delete"])
     async def command_remove(self, ctx, name: str):
         """Delete a custom command."""
-        try:
-            name = command_name(name)
-        except ValueError as exc:
-            await ctx.send(str(exc))
-            return
+        name = name.lower().lstrip("!")
         async with self._command_lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).custom_commands() as records:
                 removed = records.pop(name, None)
@@ -740,3 +801,26 @@ class TwitchBridge(commands.Cog):
             return
         await self.config.guild(ctx.guild).announcement_color.set(color)
         await ctx.send(f"Twitch announcement color set to {color}.")
+
+
+    @twitchset.command(name="shoutoutmessage")
+    async def shoutout_message(self, ctx, *, message: str):
+        """Set follow-message text with {user}, {url}, and optionally {channel}."""
+        try:
+            message = chat_text(message)
+            if "{url}" not in message:
+                raise ValueError("Include {url} so the shoutout contains the Twitch link.")
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        await self.config.guild(ctx.guild).shoutout_message.set(message)
+        await ctx.send("Shoutout message saved.")
+
+    @twitchset.command(name="shoutoutcooldown")
+    async def shoutout_cooldown(self, ctx, seconds: int):
+        """Set the shared shoutout cooldown (0-86400 seconds)."""
+        if not 0 <= seconds <= 86400:
+            await ctx.send("Choose 0-86400 seconds.")
+            return
+        await self.config.guild(ctx.guild).shoutout_cooldown.set(seconds)
+        await ctx.send("Shoutout cooldown saved.")

@@ -51,7 +51,7 @@ def log_line(event, timestamp):
     return f"[{stamp}] {name}: {text}"[:1900]
 
 
-RESERVED_COMMANDS = {"twitchset", "twitchcommand", "twitchannounce"}
+RESERVED_COMMANDS = {"twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout"}
 
 
 def command_name(value):
@@ -95,3 +95,19 @@ def command_allowed(record, platform, level):
     return (record.get("platform", "twitch") in (platform, "both")
             and record.get("permission", "everyone") in required
             and level >= required[record.get("permission", "everyone")])
+
+
+def twitch_target(value):
+    value = value.strip()
+    if "://" in value or value.lower().startswith(("twitch.tv/", "www.twitch.tv/")):
+        url = urlsplit(value if "://" in value else "https://" + value)
+        if (url.scheme not in ("http", "https") or url.hostname not in ("twitch.tv", "www.twitch.tv")
+                or url.username or url.password or url.port or url.query or url.fragment):
+            raise ValueError("Use a Twitch username or a direct twitch.tv/username URL.")
+        value = url.path.strip("/")
+    return login_name(value.lstrip("@"))
+
+
+def shoutout_text(template, identity, channel):
+    values = {"user": identity["display_name"], "url": "https://twitch.tv/" + identity["login"], "channel": channel}
+    return chat_text(re.sub(r"\{(user|url|channel)\}", lambda m: values[m[1]], template))
