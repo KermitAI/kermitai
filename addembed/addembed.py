@@ -104,17 +104,13 @@ class AddEmbed(commands.Cog):
 
     @commands.command()
     @commands.guild_only()
+    @commands.mod_or_permissions(administrator=True)
     async def addembed(self, ctx, channel: discord.TextChannel, title: str, description: str, *, options: str):
         """Create an editable embed. Quote the title and description.
 
         Example: .addembed #general "Community notes" "Add your ideas!" label: Add input style: success emoji: 📝
         Append roles: @Role @OtherRole to restrict contributions.
         """
-        moderators = discord.utils.find(lambda r: r.name.casefold() == "moderators", ctx.guild.roles)
-        if not (ctx.author.id == ctx.guild.owner_id or ctx.author.guild_permissions.administrator
-                or (moderators is not None and ctx.author.top_role >= moderators)):
-            await ctx.send("Only members with the Moderators role or a higher role can create these embeds.")
-            return
         if channel.guild.id != ctx.guild.id:
             await ctx.send("Choose a channel in this server.")
             return

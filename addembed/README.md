@@ -9,7 +9,7 @@ Load with `[p]load addembed` after installing this cog from the repository.
 
 Replace the dot with your bot prefix. Quote the title and description. Option values can contain spaces. Use role mentions or IDs for the whitelist; holding any listed role permits contributions. Trailing role mentions after the emoji are also accepted.
 
-Creation requires the **Moderators** role (case insensitive) or a role above it in the server hierarchy. Administrators and the server owner also qualify. If that role does not exist, only administrators and the server owner can create embeds. The creator must be able to view and send in the target channel.
+Creation uses Red's standard moderator permission check: configured moderator and admin roles, Discord administrators, the server owner and bot owners qualify. Red's permissions cog can grant or deny access, and its canrun check sees this requirement. Configure moderator roles with `[p]set roles addmodrole @Moderators`. Role names and Discord role position do not determine Red's moderator status. The creator must be able to view and send in the target channel.
 
 Styles: primary/blurple, secondary/grey/gray, success/green, danger/red. Emoji: Unicode, a Discord custom emoji, or `none`. Labels are limited to 80 characters.
 
