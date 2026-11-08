@@ -31,10 +31,39 @@ class ContributionTests(unittest.TestCase):
         self.assertEqual(result["style"], 3)
         self.assertEqual(result["roles"], "<@&123> <@&456>")
 
+    def test_default_style_with_emoji(self):
+        result = scope["parse_options"]("label: Submit Song Requests emoji: 🎵")
+        self.assertEqual(result["label"], "Submit Song Requests")
+        self.assertEqual(result["style"], 2)
+        self.assertEqual(result["emoji"], "🎵")
+
+    def test_default_emoji_with_style(self):
+        result = scope["parse_options"]("label: Submit Song Requests style: green")
+        self.assertEqual(result["style"], 3)
+        self.assertEqual(result["emoji"], "none")
+
+    def test_label_only_defaults(self):
+        result = scope["parse_options"]("label: Submit Song Requests")
+        self.assertEqual(result["style"], 2)
+        self.assertEqual(result["emoji"], "none")
+
+    def test_defaults_with_role_whitelist(self):
+        result = scope["parse_options"]("label: Submit roles: <@&123>")
+        self.assertEqual(result["label"], "Submit")
+        self.assertEqual(result["roles"], "<@&123>")
+        self.assertEqual(result["style"], 2)
+        self.assertEqual(result["emoji"], "none")
+
+    def test_explicit_no_emoji(self):
+        result = scope["parse_options"]("label: Submit emoji: none")
+        self.assertEqual(result["emoji"], "none")
+
     def test_invalid_options(self):
         for value in ("label: X style: link emoji: none",
                       "label: X label: Y style: green emoji: none",
-                      "label: X style: green",
+                      "style: green emoji: none",
+                      "label: style: green",
+                      "label: X style:",
                       "label: " + "a" * 81 + " style: green emoji: none"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 scope["parse_options"](value)

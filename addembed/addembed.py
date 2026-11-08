@@ -11,9 +11,9 @@ STYLES = {"primary": 1, "blurple": 1, "secondary": 2, "grey": 2, "gray": 2,
 
 def parse_options(value):
     """Parse named options without splitting spaces inside their values."""
-    matches = list(re.finditer(r"(?:^|\s)(label|style|emoji|roles):\s*", value, re.I))
+    matches = list(re.finditer(r"(?<!\S)(label|style|emoji|roles):\s*", value, re.I))
     if not matches or value[:matches[0].start()].strip():
-        raise ValueError("Use label: <label> style: <style> emoji: <emoji> [roles: <roles>].")
+        raise ValueError("Use label: <label> [style: <style>] [emoji: <emoji>] [roles: <roles>].")
     options = {}
     for index, match in enumerate(matches):
         key = match[1].lower()
@@ -21,8 +21,10 @@ def parse_options(value):
             raise ValueError(f"Specify {key}: only once.")
         end = matches[index + 1].start() if index + 1 < len(matches) else len(value)
         options[key] = value[match.end():end].strip()
-    if not all(options.get(key) for key in ("label", "style", "emoji")):
-        raise ValueError("Provide label:, style: and emoji:. Use emoji: none for no emoji.")
+    if not options.get("label"):
+        raise ValueError("Provide label: <button label>.")
+    options.setdefault("style", "secondary")
+    options.setdefault("emoji", "none")
     if len(options["label"]) > 80:
         raise ValueError("Button labels can contain at most 80 characters.")
     if options["style"].lower() not in STYLES:
@@ -109,6 +111,7 @@ class AddEmbed(commands.Cog):
         """Create an editable embed. Quote the title and description.
 
         Example: .addembed #general "Community notes" "Add your ideas!" label: Add input style: success emoji: 📝
+        Only label: is required. Style defaults to grey; emoji defaults to none.
         Append roles: @Role @OtherRole to restrict contributions.
         """
         if channel.guild.id != ctx.guild.id:

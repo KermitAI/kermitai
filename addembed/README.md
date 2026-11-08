@@ -3,6 +3,7 @@
 Load with `[p]load addembed` after installing this cog from the repository.
 
 ```
+.addembed #channel "Title" "Starting description" label: Add input
 .addembed #channel "Title" "Starting description" label: Add input style: success emoji: 📝
 .addembed #channel "Title" "Starting description" label: Add input style: primary emoji: 📝 roles: @Members @Helpers
 ```
@@ -10,6 +11,8 @@ Load with `[p]load addembed` after installing this cog from the repository.
 Replace the dot with your bot prefix. Quote the title and description. Option values can contain spaces. Use role mentions or IDs for the whitelist; holding any listed role permits contributions. Trailing role mentions after the emoji are also accepted.
 
 Creation uses Red's standard moderator permission check: configured moderator and admin roles, Discord administrators, the server owner and bot owners qualify. Red's permissions cog can grant or deny access, and its canrun check sees this requirement. Configure moderator roles with `[p]set roles addmodrole @Moderators`. Role names and Discord role position do not determine Red's moderator status. The creator must be able to view and send in the target channel.
+
+Only `label:` is required. If `style:` is omitted, the button uses secondary (grey). If `emoji:` is omitted, the button has no emoji.
 
 Styles: primary/blurple, secondary/grey/gray, success/green, danger/red. Emoji: Unicode, a Discord custom emoji, or `none`. Labels are limited to 80 characters.
 
