@@ -1,0 +1,10 @@
+{
+  "author": ["LadyLeigh"],
+  "name": "AddEmbed",
+  "short": "Member contributions to embeds through button modals.",
+  "description": "Staff-created persistent embeds with customizable buttons and optional contributor role restrictions.",
+  "min_bot_version": "3.5.0",
+  "requirements": [],
+  "tags": ["utility", "embed"],
+  "end_user_data_statement": "Stores message/channel IDs, button settings and allowed role IDs. Contributions and member mentions are published only in Discord messages."
+}
