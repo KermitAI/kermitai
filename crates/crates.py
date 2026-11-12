@@ -228,15 +228,24 @@ class Crates(commands.Cog):
                 raise ValueError("Crate pulls are disabled in this server.")
             now = time.time()
             platform = "twitch" if twitch_id is not None else "discord"
-            pull_times = platform_pull_times(data)
+            selected_crate = resolve_crate(settings["tiers"], selected_crate)
+            independent = settings["tiers"][selected_crate].get("own_cooldown", False)
+            legacy_times = platform_pull_times(data)
+            pools = data.setdefault("cooldown_pools", {})
+            pools.setdefault("shared", dict(legacy_times, shared=data["last_pull"]))
+            pool_key = f"crate:{selected_crate}" if independent else "shared"
+            pull_times = pools.setdefault(pool_key, {"discord": 0, "twitch": 0, "shared": 0})
             shared = settings.get("shared_cooldown", True)
             schedule = settings["cooldown_schedule"]
             mode = schedule["mode"]
             timer_key = "shared" if shared else platform
-            last_pull = data["last_pull"] if shared else pull_times[platform]
+            last_pull = pull_times[timer_key]
             remaining = last_pull + settings["cooldown"] - now
             if mode == "global":
-                last_global = state.get("global_pull_times", {}).get(timer_key, 0)
+                global_pools = state.setdefault("global_cooldown_pools", {})
+                global_pools.setdefault("shared", dict(state.get("global_pull_times", {})))
+                global_times = global_pools.setdefault(pool_key, {})
+                last_global = global_times.get(timer_key, 0)
                 remaining = last_global + settings["cooldown"] - now
             elif mode == "daily":
                 start, end = daily_window(now, schedule["time"], schedule["zone"])
@@ -245,16 +254,15 @@ class Crates(commands.Cog):
                 subject = "The server's next pull" if mode == "global" else "Your next pull"
                 raise ValueError(f"{subject} is available in {math.ceil(remaining)} seconds.")
             bonus = self.member_luck(guild_id, discord_id, settings)
-            selected_crate = resolve_crate(settings["tiers"], selected_crate)
             tier, name, value, reward_key = choose_reward(settings["tiers"], bonus, crate_name=selected_crate, details=True)
             award(data, name, value, now)
             stats = data.setdefault("crate_stats", {}).setdefault(tier, {"pulls": 0, "value": 0})
             stats["pulls"] += 1
             stats["value"] += value
-            pull_times[platform] = now
-            data["last_pulls"] = pull_times
+            pull_times[platform] = pull_times["shared"] = now
+            legacy_times[platform] = now
+            data["last_pulls"] = legacy_times
             if mode == "global":
-                global_times = state.setdefault("global_pull_times", {})
                 global_times[platform] = global_times["shared"] = now
             tier_config = settings["tiers"][tier]
             item = tier_config["items"][reward_key]
@@ -612,6 +620,7 @@ class Crates(commands.Cog):
             data = await self._discord_collection(state, guild_id, discord_id)
             data["last_pull"] = 0
             data["last_pulls"] = {"discord": 0, "twitch": 0}
+            data.pop("cooldown_pools", None)
             await group.collections.set(state)
 
     @crate.command(name="resetcooldown", aliases=["resetcd"])
@@ -779,8 +788,10 @@ class Crates(commands.Cog):
             result = {"weight": weight}
             if "emoji" in entry:
                 emoji = entry["emoji"]
+                if isinstance(emoji, str):
+                    emoji = emoji.strip()
                 if not isinstance(emoji, str) or not cls.valid_emoji(emoji):
-                    raise ValueError("Invalid crate or item emoji.")
+                    raise ValueError(f"Invalid emoji {emoji!r}. Use a Unicode emoji or <:name:ID> for a custom emoji.")
                 result["emoji"] = emoji
             return result
 
@@ -792,6 +803,10 @@ class Crates(commands.Cog):
             items = entry.get("items")
             if not isinstance(items, dict) or len(items) > 100:
                 raise ValueError("Each crate must have an item catalog with up to 100 items.")
+            own = entry.get("own_cooldown", False)
+            if type(own) is not bool:
+                raise ValueError("Invalid crate cooldown scope.")
+            crate["own_cooldown"] = own
             crate["items"] = {}
             for name, item in items.items():
                 if not 1 <= len(name) <= 100 or name != name.strip() or any(ord(c) < 32 for c in name):
@@ -844,8 +859,11 @@ class Crates(commands.Cog):
         except discord.HTTPException:
             await ctx.send("Could not download the attachment. Please attach it again.")
             return
-        except (ValueError, RecursionError):
-            await ctx.send("Invalid crate catalog. Use a JSON file produced by crateset export.")
+        except ValueError as exc:
+            await ctx.send(f"Invalid crate catalog: {str(exc)[:500]}", allowed_mentions=discord.AllowedMentions.none())
+            return
+        except RecursionError:
+            await ctx.send("Invalid crate catalog: the JSON is nested too deeply.")
             return
 
         async with self.lock(ctx.guild.id):
@@ -942,6 +960,21 @@ class Crates(commands.Cog):
             await self.config.guild(ctx.guild).cooldown.set(seconds)
         await ctx.send(f"Pull cooldown set to {seconds:,} seconds.")
 
+    @crateset.command(name="cratecooldown")
+    async def cratecooldown(self, ctx, crate_name: str, scope: str):
+        """Choose cratecooldown <crate> shared|own."""
+        crate_name, scope = crate_name.lower(), scope.lower()
+        if scope not in {"shared", "own"}:
+            await ctx.send("Choose shared or own.")
+            return
+        async with self.lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).tiers() as tiers:
+                if crate_name not in tiers:
+                    await ctx.send("Crate not found.")
+                    return
+                tiers[crate_name]["own_cooldown"] = scope == "own"
+        await ctx.send(f"Crate {crate_name} now uses the {scope} cooldown pool.")
+
     @crateset.command(name="cooldownmode")
     async def cooldownmode(self, ctx, mode: str, clock: Optional[str] = None, zone: str = "UTC"):
         """Select user, global, or daily HH:MM [timezone]."""
@@ -971,6 +1004,7 @@ class Crates(commands.Cog):
         async with self.lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).collections() as state:
                 state.pop("global_pull_times", None)
+                state.pop("global_cooldown_pools", None)
         await ctx.send("Global crate cooldown reset.")
 
     @crateset.command(name="enabled")

@@ -89,6 +89,14 @@ def merge_collections(target, source):
         target_stats = target.setdefault("crate_stats", {}).setdefault(tier, {"pulls": 0, "value": 0})
         target_stats["pulls"] += source_stats["pulls"]
         target_stats["value"] += source_stats["value"]
+    # Preserve cooldown eligibility when verified accounts are merged.
+    for collection in (target, source):
+        collection.setdefault("cooldown_pools", {}).setdefault(
+            "shared", dict(platform_pull_times(collection), shared=collection["last_pull"]))
+    for pool, timers in source["cooldown_pools"].items():
+        destination = target["cooldown_pools"].setdefault(pool, {})
+        for platform, timestamp in timers.items():
+            destination[platform] = max(destination.get(platform, 0), timestamp)
     if "last_pulls" in target or "last_pulls" in source:
         target_times, source_times = platform_pull_times(target), platform_pull_times(source)
         target["last_pulls"] = {platform: max(target_times[platform], source_times[platform])

@@ -94,6 +94,17 @@ file before saving. The destination can hold up to 50 crates.
 
 ## Cooldowns
 
+Use `[p]crateset cratecooldown <crate> shared|own` to choose the cooldown pool
+for each crate. All crates default to `shared`. For example,
+`[p]crateset cratecooldown coin own` gives Coin an independent timer.
+Crates set to `shared` consume the same timer. Independent crates consume only
+their own timer. Each pool uses the server's cooldown duration or daily reset
+schedule and supports User, Global, and Daily modes, plus Discord/Twitch sharing.
+Switching pools uses that pool's existing history. Member resets clear all of
+that member's pools, and the global reset clears all server-wide pools.
+Exports include each crate's scope.
+
+
 | Command | Effect |
 | --- | --- |
 | `[p]crateset cooldownmode user` | Default. Each member waits the configured duration after their own pull. |
@@ -107,7 +118,7 @@ file before saving. The destination can hold up to 50 crates.
 Use `[p]crateset cooldownmode daily 12:00 EST` for noon at UTC−5 year-round.
 Use `[p]crateset cooldownmode daily 12:00 America/Toronto` for noon Toronto
 time with daylight saving. Daily uses a 24-hour clock. Pull eligibility applies
-across all crate names, and empty outcomes consume eligibility too.
+within each cooldown pool, and empty outcomes consume eligibility too.
 
 ## Optional item reward commands
 
