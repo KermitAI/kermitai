@@ -1,0 +1,17 @@
+{
+    "author": [
+        "KermitAI"
+    ],
+    "name": "Marriage",
+    "short": "Marriages, wedding cards, and a gift shop powered by Red's bank.",
+    "description": "Send proposals, build a relationship profile, and buy and send gifts.",
+    "install_msg": "Use [p]marry and [p]gift to get started. Administrators can use [p]marriageset channel.",
+    "min_bot_version": "3.5.0",
+    "tags": [
+        "social",
+        "marriage",
+        "economy",
+        "gifts"
+    ],
+    "end_user_data_statement": "Stores member IDs, marriages, proposals, gift records, and preferences."
+}
