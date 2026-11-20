@@ -231,13 +231,11 @@ class Marriage(commands.Cog):
             else:
                 await self.reply(ctx, "Marriage accepted.")
         else:
-            delivered = await self.dm(member, embed=certificate)
+            await self.dm(member, embed=certificate)
             if ctx.interaction:
                 await self.reply(ctx, embed=certificate)
             else:
-                sent = await self.dm(ctx.author, embed=certificate)
-                await self.reply(ctx, "Marriage saved. Open `/marry profile` to view it privately."
-                                 if not (delivered and sent) else "Marriage saved. Check your DMs.")
+                await self.reply(ctx, "Marriage saved. Open `/marry profile` to view it privately.")
 
     async def remove_proposal(self, ctx, member, *, incoming):
         async with self.config.guild(ctx.guild).state() as state:
@@ -381,10 +379,6 @@ class Marriage(commands.Cog):
                 value=f"{item.description}\nItem code `{code}`",
                 inline=False,
             )
-        if not ctx.interaction:
-            delivered = await self.dm(ctx.author, embed=embed)
-            return await self.reply(ctx, "Shop sent to your DMs." if delivered else
-                                    "Use `/gift shop` for private browsing if your DMs are closed.")
         await self.reply(ctx, embed=embed)
 
     @gift.command()

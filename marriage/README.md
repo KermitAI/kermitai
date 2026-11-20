@@ -10,7 +10,7 @@ After installing the cog, the bot owner runs these commands once:
 [p]slash sync
 ```
 
-Use `slash sync` without a server argument to register the commands globally. Private profiles, proposal details, declines, divorces, and inventories use slash commands.
+Use `slash sync` without a server argument to register the commands globally. Private profiles, proposal details, declines, divorces, and inventories use slash commands. The prefix gift shop command displays the catalogue and your balance in the channel. Use `/gift shop` for private browsing.
 
 | Command | What it does |
 | --- | --- |
