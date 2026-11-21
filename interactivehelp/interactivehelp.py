@@ -458,9 +458,33 @@ class InteractiveHelp(commands.Cog):
             await ctx.send("Attach a JSON file of 256 KiB or less.")
             return
         try:
-            data = validate(json.loads((await attachment.read()).decode("utf-8-sig")))
-        except (ValueError, RecursionError, discord.HTTPException):
-            await ctx.send("The attachment could not be read as a valid version 1 menu.")
+            payload = await attachment.read()
+        except discord.HTTPException as error:
+            log.warning("Help menu attachment download failed (HTTP %s)", error.status)
+            await ctx.send(
+                "Discord could not download the attachment. Attach the file directly to a new "
+                "import command and try again."
+            )
+            return
+
+        try:
+            menu = json.loads(payload.decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            await ctx.send("Save the JSON file as UTF-8 and try again.")
+            return
+        except json.JSONDecodeError as error:
+            await ctx.send(
+                f"Invalid JSON at line {error.lineno}, column {error.colno}. {error.msg}."
+            )
+            return
+        except (RecursionError, ValueError):
+            await ctx.send("The JSON is too deeply nested or contains a number that is too large.")
+            return
+
+        try:
+            data = validate(menu)
+        except ValueError as error:
+            await ctx.send(f"Invalid help menu. {error}", allowed_mentions=discord.AllowedMentions.none())
             return
 
         def edit(menu):
