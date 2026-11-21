@@ -1,12 +1,16 @@
 import copy
 import io
 import json
+import logging
 
 import discord
 from redbot.core import Config, commands
 from redbot.core.commands.help import RedHelpFormatter
 
 from .settings import DEFAULT, GROUPS, GROUP_LABELS, validate
+
+
+log = logging.getLogger("red.kermitai.interactivehelp")
 
 
 class HelpMenuOwnerRequired(commands.CheckFailure):
@@ -306,7 +310,23 @@ class InteractiveHelp(commands.Cog):
 
     async def cog_command_error(self, ctx, error):
         if isinstance(error, HelpMenuOwnerRequired):
-            await ctx.send("Only the primary bot owner can manage the help menu.")
+            message = "Only the primary bot owner can manage the help menu."
+        elif isinstance(error, commands.NoPrivateMessage):
+            message = "Run this command in the server whose help menu you want to edit."
+        elif isinstance(error, commands.UserInputError):
+            prefix = ctx.clean_prefix
+            command = ctx.command
+            usage = f"{prefix}{command.qualified_name} {command.signature}".rstrip()
+            message = f"{error}\nUsage: `{usage}`"
+        elif isinstance(error, commands.DisabledCommand):
+            message = "This help menu command is disabled."
+        elif isinstance(error, commands.CheckFailure):
+            message = "A Red permission check blocked this help menu command."
+        else:
+            original = getattr(error, "original", error)
+            log.error("Help menu command failed", exc_info=original)
+            message = "The help menu command failed. Check the Red console for details."
+        await ctx.send(message, allowed_mentions=discord.AllowedMentions.none())
 
     async def menu(self, ctx):
         if ctx.guild:
@@ -323,6 +343,9 @@ class InteractiveHelp(commands.Cog):
     async def helpmenu(self, ctx):
         """Edit and publish this server's help menu."""
         prefix = ctx.clean_prefix
+        if ctx.subcommand_passed and ctx.invoked_subcommand is None:
+            await ctx.send(f"Unknown help menu command. Use `{prefix}helpmenu` to see the options.")
+            return
         await ctx.send(
             f"**Help Menu Editor**\n"
             f"\x60{prefix}helpmenu title <text>\x60 · Set the title\n"
@@ -343,7 +366,10 @@ class InteractiveHelp(commands.Cog):
         except ValueError as exc:
             await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
             return
-        await ctx.send("Draft updated. Use helpmenu preview or helpmenu publish.")
+        await ctx.send(
+            f"Draft updated. Use `{ctx.clean_prefix}helpmenu preview` to review it "
+            f"or `{ctx.clean_prefix}helpmenu publish` to make it live."
+        )
 
     @helpmenu.command()
     async def title(self, ctx, *, title: str):
@@ -355,7 +381,7 @@ class InteractiveHelp(commands.Cog):
         """Set or clear the draft introduction."""
         await self.edit_draft(ctx, lambda menu: menu.update(intro=intro))
 
-    @helpmenu.command()
+    @helpmenu.command(aliases=["color"])
     async def colour(self, ctx, colour: str):
         """Set the draft accent colour."""
         await self.edit_draft(ctx, lambda menu: menu.update(colour=colour))
