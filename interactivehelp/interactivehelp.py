@@ -330,14 +330,16 @@ class InteractiveHelp(commands.Cog):
 
     async def menu(self, ctx):
         if ctx.guild:
-            return (await self.config.guild(ctx.guild).settings())["published"]
+            return (await self.settings(ctx))["published"]
         return DEFAULT
 
     def draft(self, state):
-        return state["draft"] if state["draft"] is not None else state["published"]
+        return state["draft"] or state["published"]
 
     def settings(self, ctx):
-        return self.config.guild(ctx.guild).settings
+        # Supply mapping defaults for Red’s recursive merge of saved menus.
+        defaults = {"published": copy.deepcopy(DEFAULT), "draft": {}, "previous": {}}
+        return self.config.guild(ctx.guild).settings(default=defaults)
 
     @commands.group(name="helpmenu", invoke_without_command=True)
     async def helpmenu(self, ctx):
@@ -359,7 +361,7 @@ class InteractiveHelp(commands.Cog):
 
     async def edit_draft(self, ctx, edit):
         try:
-            async with self.settings(ctx)() as state:
+            async with self.settings(ctx) as state:
                 menu = copy.deepcopy(self.draft(state))
                 edit(menu)
                 state["draft"] = validate(menu)
@@ -417,7 +419,7 @@ class InteractiveHelp(commands.Cog):
     @helpmenu.command()
     async def preview(self, ctx):
         """Review the draft home screen in a DM."""
-        menu = self.draft(await self.settings(ctx)())
+        menu = self.draft(await self.settings(ctx))
         embed, _ = await self.formatter.render(ctx, menu, ("home",))
         pinned = [cat["label"] for cat in menu["categories"] if cat["pinned"]]
         embed.add_field(name="Pinned categories", value=("\n".join(pinned) or "None"))
@@ -435,7 +437,7 @@ class InteractiveHelp(commands.Cog):
         if source not in {"published", "draft"}:
             await ctx.send("Choose published or draft.")
             return
-        state = await self.settings(ctx)()
+        state = await self.settings(ctx)
         data = state["published"] if source == "published" else self.draft(state)
         payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
         try:
@@ -478,17 +480,17 @@ class InteractiveHelp(commands.Cog):
     @helpmenu.command()
     async def publish(self, ctx):
         """Make the current draft live."""
-        async with self.settings(ctx)() as state:
-            changed = state["draft"] is not None
+        async with self.settings(ctx) as state:
+            changed = bool(state["draft"])
             if changed:
-                state.update(previous=state["published"], published=state["draft"], draft=None)
+                state.update(previous=state["published"], published=state["draft"], draft={})
         await ctx.send("Help menu published." if changed else "There is no draft to publish.")
 
     @helpmenu.command()
     async def rollback(self, ctx):
         """Restore the previous published menu."""
-        async with self.settings(ctx)() as state:
-            changed = state["previous"] is not None
+        async with self.settings(ctx) as state:
+            changed = bool(state["previous"])
             if changed:
                 state["published"], state["previous"] = state["previous"], state["published"]
         await ctx.send("Previous help menu restored." if changed else "No previous menu is saved.")
