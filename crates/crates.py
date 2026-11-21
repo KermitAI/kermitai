@@ -236,7 +236,7 @@ class Crates(commands.Cog):
             pool_key = f"crate:{selected_crate}" if independent else "shared"
             pull_times = pools.setdefault(pool_key, {"discord": 0, "twitch": 0, "shared": 0})
             shared = settings.get("shared_cooldown", True)
-            schedule = settings["cooldown_schedule"]
+            schedule = settings.get("cooldown_schedule", {"mode": "user"})
             mode = schedule["mode"]
             timer_key = "shared" if shared else platform
             last_pull = pull_times[timer_key]
@@ -448,9 +448,26 @@ class Crates(commands.Cog):
                 frame, _ = self.opening_embed(ctx.author, result, strip)
                 await message.edit(embed=frame, allowed_mentions=discord.AllowedMentions.none())
             await asyncio.sleep(1)
-            await message.edit(embed=self.result_embed(result, ctx.author), allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
-            await ctx.send(embed=self.result_embed(result, ctx.author), allowed_mentions=discord.AllowedMentions.none())
+            log.warning("Crate animation edit failed in guild %s; revealing saved reward", getattr(getattr(ctx, "guild", None), "id", None), exc_info=True)
+        # Always attempt the final reveal, even when an animation edit fails.
+        for reveal_result in (result, dict(result, image=None)):
+            embed = self.result_embed(reveal_result, ctx.author)
+            try:
+                await message.edit(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                return
+            except discord.HTTPException:
+                log.warning("Crate reveal edit failed; attempting a new message", exc_info=True)
+            try:
+                await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                return
+            except discord.HTTPException:
+                log.warning("Crate reveal delivery failed; retrying without the reward image", exc_info=True)
+        outcome = ("was empty." if result.get("empty") else
+                   f"contained {result['name']}! Value: {result['value']:,}. Added to your inventory.")
+        await ctx.send(f"{ctx.author.mention}, your {result['tier']} crate {outcome}",
+                       allowed_mentions=discord.AllowedMentions.none())
+
 
     @crate.command(name="pull")
     async def pull(self, ctx, crate_name: Optional[str] = None):
@@ -747,7 +764,7 @@ class Crates(commands.Cog):
         lines = [f"Pulls enabled: {settings['enabled']} | Cooldown: {settings['cooldown']:,} seconds"]
         channel_id = settings.get("command_channel")
         lines.append(f"Crate command channel: <#{channel_id}>" if channel_id else "Crate command channel: any channel")
-        schedule = settings["cooldown_schedule"]
+        schedule = settings.get("cooldown_schedule", {"mode": "user"})
         if schedule["mode"] == "daily":
             lines[0] = f"Pulls enabled: {settings['enabled']} | Daily reset: {schedule['time']} {schedule['zone']}"
         else:
