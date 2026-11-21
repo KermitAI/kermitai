@@ -3,6 +3,7 @@ import copy
 import io
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 
 import discord
@@ -13,6 +14,7 @@ from .settings import DEFAULT, GROUPS, GROUP_LABELS, validate
 
 
 log = logging.getLogger("red.kermitai.interactivehelp")
+CUSTOM_EMOJI_PREFIX = re.compile(r"^<a?:(?P<name>\w+):(?P<id>[0-9]{1,20})>\s*")
 
 
 class HelpMenuSettingsBusy(commands.CommandError):
@@ -63,9 +65,17 @@ class MenuView(discord.ui.View):
         embed, view = await self.formatter.render(ctx, menu, page, private=self.private or private)
         await interaction.edit_original_response(embed=embed, view=view)
 
+    def component_label(self, label):
+        match = CUSTOM_EMOJI_PREFIX.match(label)
+        if match is None:
+            return label, None
+        emoji = self.ctx.bot.get_emoji(int(match["id"]))
+        return label[match.end():] or match["name"], emoji if emoji and emoji.is_usable() else None
+
     def button(self, label, page, *, row=0, primary=False, private=False):
         style = discord.ButtonStyle.primary if primary else discord.ButtonStyle.secondary
-        button = discord.ui.Button(label=label, row=row, style=style)
+        label, emoji = self.component_label(label)
+        button = discord.ui.Button(label=label, emoji=emoji, row=row, style=style)
 
         async def callback(interaction):
             await self.navigate(interaction, page, private=private)
@@ -74,11 +84,12 @@ class MenuView(discord.ui.View):
         self.add_item(button)
 
     def select(self, placeholder, options, *, row=1, private=False):
-        select = discord.ui.Select(
-            placeholder=placeholder, row=row,
-            options=[discord.SelectOption(label=label[:100], value=str(i))
-                     for i, (label, _) in enumerate(options)],
-        )
+        select_options = []
+        for index, (label, _) in enumerate(options):
+            label, emoji = self.component_label(label)
+            select_options.append(discord.SelectOption(label=label[:100], emoji=emoji,
+                                                       value=str(index)))
+        select = discord.ui.Select(placeholder=placeholder, row=row, options=select_options)
 
         async def callback(interaction):
             await self.navigate(interaction, options[int(interaction.data["values"][0])][1],
