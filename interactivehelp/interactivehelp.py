@@ -49,6 +49,30 @@ class MenuView(discord.ui.View):
             await interaction.response.defer(ephemeral=True, thinking=True)
         else:
             await interaction.response.defer()
+        try:
+            await asyncio.wait_for(
+                self.show_page(interaction, ctx, page, opens_private=opens_private),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            log.warning("Help menu navigation timed out (%s)", page[0])
+            await self.navigation_error(interaction, opens_private,
+                                        "This help page took too long to load. Please try again.")
+        except Exception:
+            log.exception("Help menu navigation failed (%s)", page[0])
+            await self.navigation_error(interaction, opens_private,
+                                        "This help page couldn't load. Check the Red console for details.")
+
+    async def navigation_error(self, interaction, opens_private, message):
+        try:
+            if opens_private:
+                await interaction.edit_original_response(content=message, embed=None, view=None)
+            else:
+                await interaction.followup.send(message, ephemeral=True)
+        except discord.HTTPException:
+            log.warning("Could not send help menu navigation error", exc_info=True)
+
+    async def show_page(self, interaction, ctx, page, *, opens_private):
         menu = await self.formatter.cog.menu()
         kind = page[0]
         required = 1 if kind == "staff" else 0
@@ -58,11 +82,13 @@ class MenuView(discord.ui.View):
             command = ctx.bot.get_command(page[1])
             if command:
                 required = self.formatter.policy(command, menu)[1]
-        if required > await self.formatter.level(ctx):
+        if required and required > await self.formatter.level(ctx):
             if opens_private:
                 await interaction.delete_original_response()
             return
-        embed, view = await self.formatter.render(ctx, menu, page, private=self.private or private)
+        embed, view = await self.formatter.render(
+            ctx, menu, page, private=self.private or opens_private
+        )
         await interaction.edit_original_response(embed=embed, view=view)
 
     def component_label(self, label):
@@ -147,19 +173,23 @@ class InteractiveFormatter(RedHelpFormatter):
         return "other", level, hidden, override
 
     async def visible(self, ctx, command):
-        while command:
-            if not command.is_enabled(ctx.guild):
-                return False
-            if command.cog and ctx.guild and await ctx.bot.cog_disabled_in_guild(
-                command.cog, ctx.guild
-            ):
-                return False
-            try:
+        target = command
+        try:
+            while command:
+                if not command.is_enabled(ctx.guild):
+                    return False
+                if command.cog and ctx.guild and await ctx.bot.cog_disabled_in_guild(
+                    command.cog, ctx.guild
+                ):
+                    return False
                 if not await command.can_see(ctx):
                     return False
-            except commands.CommandError:
-                return False
-            command = command.parent
+                command = command.parent
+        except commands.CommandError:
+            return False
+        except Exception:
+            log.exception("Could not check help visibility for %s", target.qualified_name)
+            return False
         return True
 
     async def entries(self, ctx, menu, target_level, category=None, cog=None):
@@ -236,9 +266,10 @@ class InteractiveFormatter(RedHelpFormatter):
                 title = GROUP_LABELS[level] if level else labels.get(key, key)
                 lines = []
                 for command, override in current:
-                    summary = override.get("description") or command.short_doc or "View usage"
+                    summary = (override.get("description") or command.short_doc or "").strip()
+                    summary = summary.splitlines()[0] if summary else "View usage"
                     lines.append(f"**{discord.utils.escape_markdown(command.qualified_name)[:180]}**"
-                                 f" · {summary.splitlines()[0][:130]}")
+                                 f" · {summary[:130]}")
                 embed = self.embed(menu, title[:256], "\n".join(lines) or "No commands here.")
                 embed.set_footer(text=f"Page {index + 1} of {max_index + 1}")
                 if current:
