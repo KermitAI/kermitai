@@ -1,7 +1,9 @@
+import asyncio
 import copy
 import io
 import json
 import logging
+from contextlib import asynccontextmanager
 
 import discord
 from redbot.core import Config, commands
@@ -11,6 +13,10 @@ from .settings import DEFAULT, GROUPS, GROUP_LABELS, validate
 
 
 log = logging.getLogger("red.kermitai.interactivehelp")
+
+
+class HelpMenuSettingsBusy(commands.CommandError):
+    """The server settings lock could not be acquired."""
 
 
 class HelpMenuOwnerRequired(commands.CheckFailure):
@@ -311,6 +317,8 @@ class InteractiveHelp(commands.Cog):
     async def cog_command_error(self, ctx, error):
         if isinstance(error, HelpMenuOwnerRequired):
             message = "Only the primary bot owner can manage the help menu."
+        elif isinstance(error, HelpMenuSettingsBusy):
+            message = "The help menu settings are busy. If this persists, restart Red and retry."
         elif isinstance(error, commands.NoPrivateMessage):
             message = "Run this command in the server whose help menu you want to edit."
         elif isinstance(error, commands.UserInputError):
@@ -336,10 +344,23 @@ class InteractiveHelp(commands.Cog):
     def draft(self, state):
         return state["draft"] or state["published"]
 
-    def settings(self, ctx):
+    def settings(self, ctx, *, acquire_lock=True):
         # Supply mapping defaults for Red’s recursive merge of saved menus.
         defaults = {"published": copy.deepcopy(DEFAULT), "draft": {}, "previous": {}}
-        return self.config.guild(ctx.guild).settings(default=defaults)
+        return self.config.guild(ctx.guild).settings(default=defaults, acquire_lock=acquire_lock)
+
+    @asynccontextmanager
+    async def writable_settings(self, ctx):
+        lock = self.config.guild(ctx.guild).settings.get_lock()
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=10)
+        except asyncio.TimeoutError as error:
+            raise HelpMenuSettingsBusy() from error
+        try:
+            async with self.settings(ctx, acquire_lock=False) as state:
+                yield state
+        finally:
+            lock.release()
 
     @commands.group(name="helpmenu", invoke_without_command=True)
     async def helpmenu(self, ctx):
@@ -361,7 +382,7 @@ class InteractiveHelp(commands.Cog):
 
     async def edit_draft(self, ctx, edit):
         try:
-            async with self.settings(ctx) as state:
+            async with self.writable_settings(ctx) as state:
                 menu = copy.deepcopy(self.draft(state))
                 edit(menu)
                 state["draft"] = validate(menu)
@@ -458,7 +479,10 @@ class InteractiveHelp(commands.Cog):
             await ctx.send("Attach a JSON file of 256 KiB or less.")
             return
         try:
-            payload = await attachment.read()
+            payload = await asyncio.wait_for(attachment.read(), timeout=20)
+        except asyncio.TimeoutError:
+            await ctx.send("Discord took too long to download the JSON file. Attach it again and retry.")
+            return
         except discord.HTTPException as error:
             log.warning("Help menu attachment download failed (HTTP %s)", error.status)
             await ctx.send(
@@ -504,7 +528,7 @@ class InteractiveHelp(commands.Cog):
     @helpmenu.command()
     async def publish(self, ctx):
         """Make the current draft live."""
-        async with self.settings(ctx) as state:
+        async with self.writable_settings(ctx) as state:
             changed = bool(state["draft"])
             if changed:
                 state.update(previous=state["published"], published=state["draft"], draft={})
@@ -513,7 +537,7 @@ class InteractiveHelp(commands.Cog):
     @helpmenu.command()
     async def rollback(self, ctx):
         """Restore the previous published menu."""
-        async with self.settings(ctx) as state:
+        async with self.writable_settings(ctx) as state:
             changed = bool(state["previous"])
             if changed:
                 state["published"], state["previous"] = state["previous"], state["published"]
