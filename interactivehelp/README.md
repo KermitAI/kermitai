@@ -23,7 +23,9 @@ Use explicit assignments for commands that enforce staff access through custom c
 
 ## Owner editing
 
-Run these prefix commands in the server whose menu you want to edit.
+Run these prefix commands in any server. Publishing updates the help menu for all servers and DMs. Command visibility still follows the permissions where help is opened.
+
+On first load, the cog copies an existing customized server menu if there is only one distinct saved configuration. If saved configurations differ, use `[p]helpmenu migrate` in the server you want to copy from, then publish the global draft.
 Replace `[p]` with your prefix. Only Red's primary owner account can use them.
 
 | Command | Action |
@@ -37,7 +39,8 @@ Replace `[p]` with your prefix. Only Red's primary owner account can use them.
 | `[p]helpmenu preview` | Receive a draft home-screen preview by DM |
 | `[p]helpmenu export [published/draft]` | Receive editable JSON by DM |
 | `[p]helpmenu import` | Attach an edited JSON file to validate and stage it |
-| `[p]helpmenu publish` | Put the draft live |
+| `[p]helpmenu migrate [published/draft]` | Copy a legacy server menu into the global draft |
+| `[p]helpmenu publish` | Put the draft live across all servers |
 | `[p]helpmenu rollback` | Restore the previous published menu |
 
 For example, `[p]helpmenu assign economy public gift shop` places the
