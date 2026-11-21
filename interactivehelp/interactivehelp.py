@@ -9,6 +9,10 @@ from redbot.core.commands.help import RedHelpFormatter
 from .settings import DEFAULT, GROUPS, GROUP_LABELS, validate
 
 
+class HelpMenuOwnerRequired(commands.CheckFailure):
+    """The caller is not the primary Red owner."""
+
+
 class MenuView(discord.ui.View):
     def __init__(self, formatter, ctx, *, private=False):
         super().__init__(timeout=180)
@@ -79,7 +83,7 @@ class InteractiveFormatter(RedHelpFormatter):
         self.cog = cog
 
     async def level(self, ctx):
-        if self.cog.is_primary_owner(ctx.author):
+        if await self.cog.is_primary_owner(ctx.author):
             return 4
         if not ctx.guild or not isinstance(ctx.author, discord.Member):
             return 0
@@ -285,11 +289,24 @@ class InteractiveHelp(commands.Cog):
             if getattr(self.bot, "_help_formatter", None) is self.formatter:
                 self.bot.reset_help_formatter()
 
-    def is_primary_owner(self, member):
-        return member.id == self.bot.owner_id
+    async def is_primary_owner(self, member):
+        # Red keeps the configured primary owner separately from its co-owner set.
+        owner_id = getattr(self.bot, "_owner_id_overwrite", None)
+        if owner_id is None:
+            application = self.bot.application
+            owner_id = getattr(getattr(application, "owner", None), "id", None)
+        return member.id == owner_id and await self.bot.is_owner(member)
 
     async def cog_check(self, ctx):
-        return ctx.guild is not None and self.is_primary_owner(ctx.author)
+        if not await self.is_primary_owner(ctx.author):
+            raise HelpMenuOwnerRequired()
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+        return True
+
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, HelpMenuOwnerRequired):
+            await ctx.send("Only the primary bot owner can manage the help menu.")
 
     async def menu(self, ctx):
         if ctx.guild:
@@ -303,8 +320,6 @@ class InteractiveHelp(commands.Cog):
         return self.config.guild(ctx.guild).settings
 
     @commands.group(name="helpmenu", invoke_without_command=True)
-    @commands.guild_only()
-    @commands.check(lambda ctx: ctx.cog.is_primary_owner(ctx.author))
     async def helpmenu(self, ctx):
         """Edit and publish this server's help menu."""
         prefix = ctx.clean_prefix
