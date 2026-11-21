@@ -47,7 +47,7 @@ class MenuView(discord.ui.View):
             await interaction.response.defer(ephemeral=True, thinking=True)
         else:
             await interaction.response.defer()
-        menu = await self.formatter.cog.menu(ctx)
+        menu = await self.formatter.cog.menu()
         kind = page[0]
         required = 1 if kind == "staff" else 0
         if kind == "group":
@@ -249,7 +249,7 @@ class InteractiveFormatter(RedHelpFormatter):
         if ctx.guild and not ctx.channel.permissions_for(ctx.me).embed_links:
             await ctx.send("Interactive help requires the Embed Links permission in this channel.")
             return
-        menu = await self.cog.menu(ctx)
+        menu = await self.cog.menu()
         target = help_for
         if isinstance(target, str):
             target = ctx.bot.get_command(" ".join(target.split())) or ctx.bot.get_cog(target)
@@ -280,16 +280,17 @@ class InteractiveFormatter(RedHelpFormatter):
 
 
 class InteractiveHelp(commands.Cog):
-    """Interactive help and its owner-only server settings."""
+    """Interactive help and its owner-only global settings."""
 
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=941620174225037, force_registration=True)
-        self.config.register_guild(settings={"published": DEFAULT, "draft": None, "previous": None})
+        self.config.register_global(settings={})
         self.formatter = InteractiveFormatter(self)
         self.active = False
 
     async def cog_load(self):
+        await self.migrate_guild_menus()
         self.bot.set_help_formatter(self.formatter)
         self.active = True
 
@@ -320,7 +321,7 @@ class InteractiveHelp(commands.Cog):
         elif isinstance(error, HelpMenuSettingsBusy):
             message = "The help menu settings are busy. If this persists, restart Red and retry."
         elif isinstance(error, commands.NoPrivateMessage):
-            message = "Run this command in the server whose help menu you want to edit."
+            message = "Run this command in any server to edit the global help menu."
         elif isinstance(error, commands.UserInputError):
             prefix = ctx.clean_prefix
             command = ctx.command
@@ -336,53 +337,78 @@ class InteractiveHelp(commands.Cog):
             message = "The help menu command failed. Check the Red console for details."
         await ctx.send(message, allowed_mentions=discord.AllowedMentions.none())
 
-    async def menu(self, ctx):
-        if ctx.guild:
-            return (await self.settings(ctx))["published"]
-        return DEFAULT
+    async def menu(self):
+        return (await self.settings())["published"]
+
+    def legacy_state(self, data):
+        saved = data.get("settings", {})
+        return {
+            "published": saved.get("published") or DEFAULT,
+            "draft": saved.get("draft") or {},
+            "previous": saved.get("previous") or {},
+        }
+
+    async def migrate_guild_menus(self):
+        async with self.writable_settings() as state:
+            if state["migrated"]:
+                return
+            candidates = []
+            for guild_data in (await self.config.all_guilds()).values():
+                legacy = self.legacy_state(guild_data)
+                if legacy["published"] != DEFAULT or legacy["draft"] or legacy["previous"]:
+                    candidates.append(legacy)
+            if candidates and all(candidate == candidates[0] for candidate in candidates):
+                state.update(candidates[0])
+            elif candidates:
+                log.warning(
+                    "Multiple legacy help menus differ. Use helpmenu migrate in the source "
+                    "server, then publish the draft to make it global."
+                )
+            state["migrated"] = True
 
     def draft(self, state):
         return state["draft"] or state["published"]
 
-    def settings(self, ctx, *, acquire_lock=True):
-        # Supply mapping defaults for Red’s recursive merge of saved menus.
-        defaults = {"published": copy.deepcopy(DEFAULT), "draft": {}, "previous": {}}
-        return self.config.guild(ctx.guild).settings(default=defaults, acquire_lock=acquire_lock)
+    def settings(self, *, acquire_lock=True):
+        defaults = {"published": copy.deepcopy(DEFAULT), "draft": {}, "previous": {},
+                    "migrated": False}
+        return self.config.settings(default=defaults, acquire_lock=acquire_lock)
 
     @asynccontextmanager
-    async def writable_settings(self, ctx):
-        lock = self.config.guild(ctx.guild).settings.get_lock()
+    async def writable_settings(self):
+        lock = self.config.settings.get_lock()
         try:
             await asyncio.wait_for(lock.acquire(), timeout=10)
         except asyncio.TimeoutError as error:
             raise HelpMenuSettingsBusy() from error
         try:
-            async with self.settings(ctx, acquire_lock=False) as state:
+            async with self.settings(acquire_lock=False) as state:
                 yield state
         finally:
             lock.release()
 
     @commands.group(name="helpmenu", invoke_without_command=True)
     async def helpmenu(self, ctx):
-        """Edit and publish this server's help menu."""
+        """Edit and publish the bot-wide help menu."""
         prefix = ctx.clean_prefix
         if ctx.subcommand_passed and ctx.invoked_subcommand is None:
             await ctx.send(f"Unknown help menu command. Use `{prefix}helpmenu` to see the options.")
             return
         await ctx.send(
-            f"**Help Menu Editor**\n"
+            f"**Global Help Menu Editor**\n"
             f"\x60{prefix}helpmenu title <text>\x60 · Set the title\n"
             f"\x60{prefix}helpmenu intro <text>\x60 · Set the introduction\n"
             f"\x60{prefix}helpmenu colour <#RRGGBB>\x60 · Set the accent\n"
             f"\x60{prefix}helpmenu category <id> <true|false> <label>\x60 · Add or rename a category\n"
             f"\x60{prefix}helpmenu assign <category> <group> <command>\x60 · Assign a command\n"
             f"\x60{prefix}helpmenu preview\x60 / \x60publish\x60 / \x60rollback\x60\n"
-            f"\x60{prefix}helpmenu export [published|draft]\x60 / \x60import\x60 (attach JSON)"
+            f"\x60{prefix}helpmenu export [published|draft]\x60 / \x60import\x60 (attach JSON)\n"
+            f"\x60{prefix}helpmenu migrate [published|draft]\x60 · Stage a legacy server menu"
         )
 
     async def edit_draft(self, ctx, edit):
         try:
-            async with self.writable_settings(ctx) as state:
+            async with self.writable_settings() as state:
                 menu = copy.deepcopy(self.draft(state))
                 edit(menu)
                 state["draft"] = validate(menu)
@@ -440,11 +466,11 @@ class InteractiveHelp(commands.Cog):
     @helpmenu.command()
     async def preview(self, ctx):
         """Review the draft home screen in a DM."""
-        menu = self.draft(await self.settings(ctx))
+        menu = self.draft(await self.settings())
         embed, _ = await self.formatter.render(ctx, menu, ("home",))
         pinned = [cat["label"] for cat in menu["categories"] if cat["pinned"]]
         embed.add_field(name="Pinned categories", value=("\n".join(pinned) or "None"))
-        embed.set_footer(text=f"Draft · {ctx.guild.name}"[:200])
+        embed.set_footer(text="Global draft")
         try:
             await ctx.author.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         except discord.Forbidden:
@@ -458,7 +484,7 @@ class InteractiveHelp(commands.Cog):
         if source not in {"published", "draft"}:
             await ctx.send("Choose published or draft.")
             return
-        state = await self.settings(ctx)
+        state = await self.settings()
         data = state["published"] if source == "published" else self.draft(state)
         payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
         try:
@@ -526,18 +552,36 @@ class InteractiveHelp(commands.Cog):
                            f"{len(missing_cogs)} unloaded cog(s).")
 
     @helpmenu.command()
+    async def migrate(self, ctx, source: str = "published"):
+        """Stage a legacy server menu as the global draft."""
+        if source not in {"published", "draft"}:
+            await ctx.send("Choose published or draft.")
+            return
+        data = await self.config.guild(ctx.guild).get_raw("settings", default=None)
+        menu = data.get(source) if data else None
+        if not menu:
+            await ctx.send("This server has no saved legacy menu for that option.")
+            return
+
+        def edit(draft):
+            draft.clear()
+            draft.update(menu)
+
+        await self.edit_draft(ctx, edit)
+
+    @helpmenu.command()
     async def publish(self, ctx):
         """Make the current draft live."""
-        async with self.writable_settings(ctx) as state:
+        async with self.writable_settings() as state:
             changed = bool(state["draft"])
             if changed:
                 state.update(previous=state["published"], published=state["draft"], draft={})
-        await ctx.send("Help menu published." if changed else "There is no draft to publish.")
+        await ctx.send("Help menu published to all servers." if changed else "There is no draft to publish.")
 
     @helpmenu.command()
     async def rollback(self, ctx):
         """Restore the previous published menu."""
-        async with self.writable_settings(ctx) as state:
+        async with self.writable_settings() as state:
             changed = bool(state["previous"])
             if changed:
                 state["published"], state["previous"] = state["previous"], state["published"]
