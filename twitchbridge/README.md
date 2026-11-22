@@ -863,12 +863,12 @@ In Discord, Red moderators, members with Manage Server, server owners and bot
 owners can use:
 
 ```
-[p]twitchstream title A new adventure begins!
-[p]twitchstream game Minecraft
-[p]twitchstream category Just Chatting
-[p]twitchstream tags English Cozy Community
-[p]twitchstream tags clear
-[p]twitchstream language en
+[p]tstream title A new adventure begins!
+[p]tstream game Minecraft
+[p]tstream category Just Chatting
+[p]tstream tags English Cozy Community
+[p]tstream tags clear
+[p]tstream language en
 ```
 
 Omit a value to read it. Discord uses its own moderator permissions; members do

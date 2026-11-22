@@ -119,8 +119,8 @@ class ChannelEditMixin:
 
     @commands.mod_or_permissions(manage_guild=True)
     @commands.guild_only()
-    @commands.group(name="twitchstream", invoke_without_command=True)
-    async def twitchstream(self, ctx):
+    @commands.group(name="tstream", invoke_without_command=True)
+    async def tstream(self, ctx):
         """Moderator controls for this server's Twitch title/category/tags/language."""
         await ctx.send_help()
 
@@ -131,22 +131,22 @@ class ChannelEditMixin:
         except (BridgeError, ValueError) as exc:
             await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
 
-    @twitchstream.command(name="title")
+    @tstream.command(name="title")
     async def stream_title(self, ctx, *, title: str = ""):
         """Show the title, or set it when text is provided."""
         await self._channel_reply(ctx, "title", title)
 
-    @twitchstream.command(name="category", aliases=["game"])
+    @tstream.command(name="category", aliases=["game"])
     async def stream_category(self, ctx, *, category: str = ""):
         """Show/set a game or category by name or Twitch ID."""
         await self._channel_reply(ctx, "category", category)
 
-    @twitchstream.command(name="tags")
+    @tstream.command(name="tags")
     async def stream_tags(self, ctx, *, tags: str = ""):
         """Show/set tags, or use clear to remove them."""
         await self._channel_reply(ctx, "tags", tags)
 
-    @twitchstream.command(name="language")
+    @tstream.command(name="language")
     async def stream_language(self, ctx, language: str = ""):
         """Show/set a supported two-letter stream language."""
         await self._channel_reply(ctx, "language", language)

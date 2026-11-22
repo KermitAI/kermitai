@@ -51,7 +51,7 @@ def log_line(event, timestamp):
     return f"[{stamp}] {name}: {text}"[:1900]
 
 
-RESERVED_COMMANDS = {"twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout", "todo", "ads", "streak", "twitchtodo", "twitchads", "twitchtimer", "twitchtrigger", "twitchcounter", "twitchfirst", "twitchstreak", "twitchstream", "title", "game", "category", "tags", "language"}
+RESERVED_COMMANDS = {"twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout", "todo", "ads", "streak", "twitchtodo", "twitchads", "twitchtimer", "twitchtrigger", "twitchcounter", "twitchfirst", "twitchstreak", "tstream", "title", "game", "category", "tags", "language"}
 
 
 def command_name(value):
