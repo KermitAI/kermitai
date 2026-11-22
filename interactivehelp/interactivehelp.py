@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import discord
 from redbot.core import Config, commands
@@ -28,6 +29,20 @@ class HelpMenuSettingsBusy(commands.CommandError):
 
 class HelpMenuOwnerRequired(commands.CheckFailure):
     """The caller is not the primary Red owner."""
+
+
+@dataclass
+class CustomHelpCommand:
+    qualified_name: str
+    cog: commands.Cog
+
+    parent = None
+    hidden = False
+    short_doc = "Server custom command"
+
+    @property
+    def cog_name(self):
+        return self.cog.qualified_name
 
 
 class MenuView(discord.ui.View):
@@ -83,10 +98,12 @@ class MenuView(discord.ui.View):
         required = 1 if kind == "staff" else 0
         if kind == "group":
             required = page[1]
+        if kind == "category" and page[1] == "other":
+            required = 4
         if kind == "details":
-            command = ctx.bot.get_command(page[1])
+            command = await self.formatter.find_command(ctx, page[1])
             if command:
-                required = self.formatter.policy(command, menu)[1]
+                required = self.formatter.detail_level(command, menu)
         if required and required > await self.formatter.level(ctx):
             if opens_private:
                 await interaction.delete_original_response()
@@ -181,7 +198,25 @@ class InteractiveFormatter(RedHelpFormatter):
                 return category["id"], level, hidden, override
         return "other", level, hidden, override
 
+    async def custom_commands(self, ctx):
+        cog = ctx.bot.get_cog("CustomCommands")
+        if ctx.guild is None or cog is None or await ctx.bot.cog_disabled_in_guild(cog, ctx.guild):
+            return {}
+        return {name: CustomHelpCommand(name, cog)
+                for name in await cog.get_command_names(ctx.guild)
+                if ctx.bot.get_command(name) is None}
+
+    async def find_command(self, ctx, name):
+        command = ctx.bot.get_command(name)
+        return command if command is not None else (await self.custom_commands(ctx)).get(name)
+
+    def detail_level(self, command, menu):
+        category, level, _, _ = self.policy(command, menu)
+        return 4 if category == "other" and level == 0 else level
+
     async def visible(self, ctx, command):
+        if isinstance(command, CustomHelpCommand):
+            return True
         target = command
         try:
             while command:
@@ -203,9 +238,13 @@ class InteractiveFormatter(RedHelpFormatter):
 
     async def entries(self, ctx, menu, target_level, category=None, cog=None):
         result = []
-        for command in sorted(set(ctx.bot.walk_commands()), key=lambda item: item.qualified_name):
+        registered = set(ctx.bot.walk_commands())
+        custom = await self.custom_commands(ctx)
+        for command in sorted([*registered, *custom.values()], key=lambda item: item.qualified_name):
             key, level, hidden, override = self.policy(command, menu)
             if hidden or level != target_level or (category and category != key):
+                continue
+            if key == "other" and level == 0 and category != "other":
                 continue
             if cog is not None and command.cog_name != cog:
                 continue
@@ -220,8 +259,9 @@ class InteractiveFormatter(RedHelpFormatter):
     async def render(self, ctx, menu, page, *, private=False):
         kind, *args = page
         view = MenuView(self, ctx, private=private)
-        categories = menu["categories"] + [{"id": "other", "label": "Other Commands"}]
+        categories = menu["categories"]
         labels = {category["id"]: category["label"] for category in categories}
+        labels["other"] = "Other Commands"
         if kind == "home":
             lines = [menu["intro"]]
             for category in categories:
@@ -230,9 +270,10 @@ class InteractiveFormatter(RedHelpFormatter):
                                 private=True)
                     if category.get("description"):
                         lines.append(f"**{category['label']}** · {category['description']}")
-            view.select("All Categories", [
-                (category["label"], ("category", category["id"], 0)) for category in categories
-            ], private=True)
+            if categories:
+                view.select("All Categories", [
+                    (category["label"], ("category", category["id"], 0)) for category in categories
+                ], private=True)
             if ctx.guild:
                 view.button("Staff Help", ("staff",), row=2, private=True)
             return self.embed(menu, description="\n".join(lines)), view
@@ -246,15 +287,21 @@ class InteractiveFormatter(RedHelpFormatter):
                 return self.embed(menu, "Staff Help", "Choose a permission group."), view
         elif kind == "details":
             name, back = args
-            command = ctx.bot.get_command(name)
+            command = await self.find_command(ctx, name)
             if command:
-                _, level, hidden, override = self.policy(command, menu)
+                _, _, hidden, override = self.policy(command, menu)
+                level = self.detail_level(command, menu)
                 if (not hidden and (not level or private and level <= await self.level(ctx))
                         and await self.visible(ctx, command)):
-                    description = override.get("description") or command.format_help_for_context(ctx)
+                    if isinstance(command, CustomHelpCommand):
+                        description = command.short_doc
+                        signature = f"{ctx.clean_prefix}{command.qualified_name}"
+                    else:
+                        description = command.format_help_for_context(ctx)
+                        signature = self.get_command_signature(ctx, command).strip()
+                    description = override.get("description") or description
                     embed = self.embed(menu, command.qualified_name[:256],
                                        (description or "No description provided.")[:3400])
-                    signature = self.get_command_signature(ctx, command).strip()
                     embed.add_field(name="Usage", value=discord.utils.escape_markdown(
                         signature[:950]), inline=False)
                     if override.get("example"):
@@ -265,7 +312,9 @@ class InteractiveFormatter(RedHelpFormatter):
         else:
             key, index = args
             level = key if kind == "group" else 0
-            if not level or (private and level <= await self.level(ctx)):
+            owner_only = kind == "category" and key == "other"
+            required = 4 if owner_only else level
+            if not required or (private and required <= await self.level(ctx)):
                 category = key if kind == "category" else None
                 cog = key if kind == "cog" else None
                 rows = await self.entries(ctx, menu, level, category=category, cog=cog)
@@ -287,7 +336,14 @@ class InteractiveFormatter(RedHelpFormatter):
                                                   (kind, key, index)))
                         for command, _ in current
                     ], private=True)
-                view.button("Back" if level else "Home", ("staff",) if level else ("home",))
+                if owner_only:
+                    view.button("Back", ("group", 4, 0))
+                elif level:
+                    view.button("Back", ("staff",))
+                    if level == 4:
+                        view.button("Other Commands", ("category", "other", 0))
+                else:
+                    view.button("Home", ("home",))
                 if index:
                     view.button("Previous", (kind, key, index - 1))
                 if index < max_index:
@@ -303,9 +359,10 @@ class InteractiveFormatter(RedHelpFormatter):
         menu = await self.cog.menu()
         target = help_for
         if isinstance(target, str):
-            target = ctx.bot.get_command(" ".join(target.split())) or ctx.bot.get_cog(target)
-        if isinstance(target, commands.Command):
-            _, level, hidden, _ = self.policy(target, menu)
+            target = await self.find_command(ctx, " ".join(target.split())) or ctx.bot.get_cog(target)
+        if isinstance(target, (commands.Command, CustomHelpCommand)):
+            _, _, hidden, _ = self.policy(target, menu)
+            level = self.detail_level(target, menu)
             if hidden or level > await self.level(ctx) or not await self.visible(ctx, target):
                 await ctx.send("No matching help entry is available.")
                 return
@@ -503,7 +560,7 @@ class InteractiveHelp(commands.Cog):
     @helpmenu.command()
     async def assign(self, ctx, category_id: str, group: str, *, command_name: str):
         """Assign a command to a category and set its minimum help access."""
-        command = ctx.bot.get_command(command_name)
+        command = await self.formatter.find_command(ctx, command_name)
         if command is None:
             await ctx.send("That command could not be found.")
             return
@@ -594,7 +651,8 @@ class InteractiveHelp(commands.Cog):
 
         unknown = {name for category in data["categories"] for name in category["commands"]}
         unknown.update(data["overrides"])
-        missing = sum(ctx.bot.get_command(name) is None for name in unknown)
+        custom = await self.formatter.custom_commands(ctx)
+        missing = sum(ctx.bot.get_command(name) is None and name not in custom for name in unknown)
         missing_cogs = {name for category in data["categories"] for name in category["cogs"]
                         if ctx.bot.get_cog(name) is None}
         await self.edit_draft(ctx, edit)
