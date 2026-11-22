@@ -7,7 +7,8 @@ Red's formatter if InteractiveHelp still controls it.
 
 ## Member experience
 
-- `[p]help` opens a dashboard in the current channel.
+- `[p]help` and `/help` open the same dashboard in the current channel.
+- Use `/help command:<name>` for command or tag details. After updating and reloading the cog, enable `/help` with `[p]slash enablecog InteractiveHelp` and run `[p]slash sync`.
 - Category buttons and the All Categories dropdown open private pages for
   the member who requested help. Pages include command details and navigation.
 - `[p]help gift shop` opens a control for viewing that command's help privately.
@@ -23,7 +24,9 @@ Use explicit assignments for commands that enforce staff access through custom c
 
 ## Owner editing
 
-Run these prefix commands in the server whose menu you want to edit.
+Run these prefix commands in any server. Publishing updates the help menu for all servers and DMs. Command visibility still follows the permissions where help is opened.
+
+On first load, the cog copies an existing customized server menu if there is only one distinct saved configuration. If saved configurations differ, use `[p]helpmenu migrate` in the server you want to copy from, then publish the global draft.
 Replace `[p]` with your prefix. Only Red's primary owner account can use them.
 
 | Command | Action |
@@ -37,7 +40,8 @@ Replace `[p]` with your prefix. Only Red's primary owner account can use them.
 | `[p]helpmenu preview` | Receive a draft home-screen preview by DM |
 | `[p]helpmenu export [published/draft]` | Receive editable JSON by DM |
 | `[p]helpmenu import` | Attach an edited JSON file to validate and stage it |
-| `[p]helpmenu publish` | Put the draft live |
+| `[p]helpmenu migrate [published/draft]` | Copy a legacy server menu into the global draft |
+| `[p]helpmenu publish` | Put the draft live across all servers |
 | `[p]helpmenu rollback` | Restore the previous published menu |
 
 For example, `[p]helpmenu assign economy public gift shop` places the
@@ -56,5 +60,13 @@ the current prefix. The reserved category ID `other` collects unassigned
 commands. Protect any imported menu file containing staff command names by
 posting it in a channel visible only to trusted staff.
 
-The draft focuses on prefix command discovery and prefix-based owner editing.
+The export includes a `staff` object with `bot_owner`, `guild_owner`,
+`administrator`, and `moderator` command lists. The first export populates
+these with discovered staff commands. After importing an edited list, the
+staff pages use those assignments. Add a new command or tag by its full name,
+move a name to another list, or delete the name to omit it from the staff
+pages. Use `overrides.<command>.hidden` to hide an entry everywhere.
+Red still enforces built-in privileges and command checks. New staff commands
+can be added to an imported list by editing the JSON or with `helpmenu assign`.
+The owner-only Other Commands page remains the fallback for unassigned entries.
 

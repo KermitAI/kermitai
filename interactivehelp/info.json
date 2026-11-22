@@ -3,8 +3,8 @@
         "KermitAI"
     ],
     "name": "InteractiveHelp",
-    "short": "Interactive, server-customizable help.",
+    "short": "Interactive, bot-wide help.",
     "description": "Replaces Red's help formatter with an interactive command directory.",
     "min_bot_version": "3.5.0",
-    "end_user_data_statement": "This cog stores help menu configuration per server and does not store user data."
+    "end_user_data_statement": "This cog stores help menu configuration for the bot and does not store user data."
 }

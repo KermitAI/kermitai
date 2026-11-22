@@ -1,12 +1,49 @@
+import asyncio
 import copy
 import io
 import json
+import logging
+import re
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import discord
+from discord import app_commands
 from redbot.core import Config, commands
 from redbot.core.commands.help import RedHelpFormatter
 
 from .settings import DEFAULT, GROUPS, GROUP_LABELS, validate
+
+
+log = logging.getLogger("red.kermitai.interactivehelp")
+CUSTOM_EMOJI_PREFIX = re.compile(r"^<a?:(?P<name>\w+):(?P<id>[0-9]{1,20})>\s*")
+UNICODE_EMOJI_PREFIX = re.compile(
+    r"^([\U0001F000-\U0001FAFF\u2194-\u21FF\u2300-\u23FF\u25A0-\u27BF\u2B00-\u2BFF]"
+    r"(?:[\ufe0f\U0001F3FB-\U0001F3FF\u200d\U0001F000-\U0001FAFF\u2194-\u21FF"
+    r"\u2300-\u23FF\u25A0-\u27BF\u2B00-\u2BFF])*)\s+"
+)
+
+
+class HelpMenuSettingsBusy(commands.CommandError):
+    """The server settings lock could not be acquired."""
+
+
+class HelpMenuOwnerRequired(commands.CheckFailure):
+    """The caller is not the primary Red owner."""
+
+
+@dataclass
+class CustomHelpCommand:
+    qualified_name: str
+    cog: commands.Cog
+    short_doc: str = "Server custom command"
+
+    parent = None
+    hidden = False
+
+    @property
+    def cog_name(self):
+        return self.cog.qualified_name
 
 
 class MenuView(discord.ui.View):
@@ -33,25 +70,65 @@ class MenuView(discord.ui.View):
             await interaction.response.defer(ephemeral=True, thinking=True)
         else:
             await interaction.response.defer()
-        menu = await self.formatter.cog.menu(ctx)
+        try:
+            await asyncio.wait_for(
+                self.show_page(interaction, ctx, page, opens_private=opens_private),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            log.warning("Help menu navigation timed out (%s)", page[0])
+            await self.navigation_error(interaction, opens_private,
+                                        "This help page took too long to load. Please try again.")
+        except Exception:
+            log.exception("Help menu navigation failed (%s)", page[0])
+            await self.navigation_error(interaction, opens_private,
+                                        "This help page couldn't load. Check the Red console for details.")
+
+    async def navigation_error(self, interaction, opens_private, message):
+        try:
+            if opens_private:
+                await interaction.edit_original_response(content=message, embed=None, view=None)
+            else:
+                await interaction.followup.send(message, ephemeral=True)
+        except discord.HTTPException:
+            log.warning("Could not send help menu navigation error", exc_info=True)
+
+    async def show_page(self, interaction, ctx, page, *, opens_private):
+        menu = await self.formatter.cog.menu()
         kind = page[0]
         required = 1 if kind == "staff" else 0
         if kind == "group":
             required = page[1]
+        if kind == "category" and page[1] == "other":
+            required = 4
         if kind == "details":
-            command = ctx.bot.get_command(page[1])
+            command = await self.formatter.find_command(ctx, page[1])
             if command:
-                required = self.formatter.policy(command, menu)[1]
-        if required > await self.formatter.level(ctx):
+                required = self.formatter.detail_level(command, menu)
+        if required and required > await self.formatter.level(ctx):
             if opens_private:
                 await interaction.delete_original_response()
             return
-        embed, view = await self.formatter.render(ctx, menu, page, private=self.private or private)
+        embed, view = await self.formatter.render(
+            ctx, menu, page, private=self.private or opens_private
+        )
         await interaction.edit_original_response(embed=embed, view=view)
+
+    def component_label(self, label):
+        match = CUSTOM_EMOJI_PREFIX.match(label)
+        if match:
+            emoji = self.ctx.bot.get_emoji(int(match["id"]))
+            return label[match.end():] or match["name"], emoji if emoji and emoji.is_usable() else None
+
+        match = UNICODE_EMOJI_PREFIX.match(label)
+        if match and label[match.end():]:
+            return label[match.end():], match[1]
+        return label, None
 
     def button(self, label, page, *, row=0, primary=False, private=False):
         style = discord.ButtonStyle.primary if primary else discord.ButtonStyle.secondary
-        button = discord.ui.Button(label=label, row=row, style=style)
+        label, emoji = self.component_label(label)
+        button = discord.ui.Button(label=label, emoji=emoji, row=row, style=style)
 
         async def callback(interaction):
             await self.navigate(interaction, page, private=private)
@@ -60,11 +137,12 @@ class MenuView(discord.ui.View):
         self.add_item(button)
 
     def select(self, placeholder, options, *, row=1, private=False):
-        select = discord.ui.Select(
-            placeholder=placeholder, row=row,
-            options=[discord.SelectOption(label=label[:100], value=str(i))
-                     for i, (label, _) in enumerate(options)],
-        )
+        select_options = []
+        for index, (label, _) in enumerate(options):
+            label, emoji = self.component_label(label)
+            select_options.append(discord.SelectOption(label=label[:100], emoji=emoji,
+                                                       value=str(index)))
+        select = discord.ui.Select(placeholder=placeholder, row=row, options=select_options)
 
         async def callback(interaction):
             await self.navigate(interaction, options[int(interaction.data["values"][0])][1],
@@ -79,7 +157,7 @@ class InteractiveFormatter(RedHelpFormatter):
         self.cog = cog
 
     async def level(self, ctx):
-        if self.cog.is_primary_owner(ctx.author):
+        if await self.cog.is_primary_owner(ctx.author):
             return 4
         if not ctx.guild or not isinstance(ctx.author, discord.Member):
             return 0
@@ -96,20 +174,27 @@ class InteractiveFormatter(RedHelpFormatter):
         while command:
             chain.append(command)
             command = command.parent
-        level = 4 if command.cog is self.cog else 0
+        level = 4 if chain[0].cog is self.cog else 0
         hidden = False
         override = {}
         explicit_category = None
+        staff = menu.get("staff")
         for item in reversed(chain):
             override = menu["overrides"].get(item.qualified_name, {})
             if "category" in override:
                 explicit_category = override["category"]
             privilege = getattr(getattr(item, "requires", None), "privilege_level", None)
-            level = max(level, GROUPS.index(override.get("group", "public")), {
+            group = override.get("group", "public")
+            if staff is not None:
+                group = next((key for key, names in staff.items() if item.qualified_name in names),
+                             group)
+            level = max(level, GROUPS.index(group), {
                 "MOD": 1, "ADMIN": 2, "GUILD_OWNER": 3, "BOT_OWNER": 4,
             }.get(getattr(privilege, "name", ""), 0))
             hidden |= override.get("hidden", False) or item.hidden
         item = chain[0]
+        if staff is not None and level:
+            hidden |= not any(item.qualified_name in names for names in staff.values())
         if explicit_category is not None:
             return explicit_category, level, hidden, override
         for candidate in chain:
@@ -121,27 +206,71 @@ class InteractiveFormatter(RedHelpFormatter):
                 return category["id"], level, hidden, override
         return "other", level, hidden, override
 
+    async def custom_commands(self, ctx):
+        tags = ctx.bot.get_cog("Tags")
+        get_unique_tags = getattr(tags, "get_unique_tags", None)
+        if callable(get_unique_tags):
+            invoke = ctx.bot.get_command("invoketag")
+            if invoke is not None and invoke.cog is tags and await self.visible(ctx, invoke):
+                scopes = (None, ctx.guild) if ctx.guild else (None,)
+                names = {
+                    name
+                    for guild in scopes
+                    for tag in get_unique_tags(guild)
+                    for name in (tag.name, *tag.aliases)
+                }
+                return {name: CustomHelpCommand(name, tags, "Tag command")
+                        for name in names if ctx.bot.get_command(name) is None}
+
+        cog = ctx.bot.get_cog("CustomCommands")
+        if ctx.guild is None or cog is None or await ctx.bot.cog_disabled_in_guild(cog, ctx.guild):
+            return {}
+        return {name: CustomHelpCommand(name, cog)
+                for name in await cog.get_command_names(ctx.guild)
+                if ctx.bot.get_command(name) is None}
+
+    async def find_command(self, ctx, name):
+        command = ctx.bot.get_command(name)
+        return command if command is not None else (await self.custom_commands(ctx)).get(name)
+
+    def detail_level(self, command, menu):
+        category, level, _, _ = self.policy(command, menu)
+        return 4 if category == "other" and level == 0 else level
+
     async def visible(self, ctx, command):
-        while command:
-            if not command.is_enabled(ctx.guild):
-                return False
-            if command.cog and ctx.guild and await ctx.bot.cog_disabled_in_guild(
-                command.cog, ctx.guild
-            ):
-                return False
-            try:
+        if isinstance(command, CustomHelpCommand):
+            return True
+        target = command
+        try:
+            while command:
+                if not command.is_enabled(ctx.guild):
+                    return False
+                if command.cog and ctx.guild and await ctx.bot.cog_disabled_in_guild(
+                    command.cog, ctx.guild
+                ):
+                    return False
                 if not await command.can_see(ctx):
                     return False
-            except commands.CommandError:
-                return False
-            command = command.parent
+                command = command.parent
+        except commands.CommandError:
+            return False
+        except Exception:
+            log.exception("Could not check help visibility for %s", target.qualified_name)
+            return False
         return True
+
+    async def known_commands(self, ctx):
+        registered = set(ctx.bot.walk_commands())
+        custom = await self.custom_commands(ctx)
+        return sorted([*registered, *custom.values()], key=lambda item: item.qualified_name)
 
     async def entries(self, ctx, menu, target_level, category=None, cog=None):
         result = []
-        for command in sorted(set(ctx.bot.walk_commands()), key=lambda item: item.qualified_name):
+        for command in await self.known_commands(ctx):
             key, level, hidden, override = self.policy(command, menu)
             if hidden or level != target_level or (category and category != key):
+                continue
+            if key == "other" and level == 0 and category != "other":
                 continue
             if cog is not None and command.cog_name != cog:
                 continue
@@ -156,8 +285,9 @@ class InteractiveFormatter(RedHelpFormatter):
     async def render(self, ctx, menu, page, *, private=False):
         kind, *args = page
         view = MenuView(self, ctx, private=private)
-        categories = menu["categories"] + [{"id": "other", "label": "Other Commands"}]
+        categories = menu["categories"]
         labels = {category["id"]: category["label"] for category in categories}
+        labels["other"] = "Other Commands"
         if kind == "home":
             lines = [menu["intro"]]
             for category in categories:
@@ -166,9 +296,10 @@ class InteractiveFormatter(RedHelpFormatter):
                                 private=True)
                     if category.get("description"):
                         lines.append(f"**{category['label']}** · {category['description']}")
-            view.select("All Categories", [
-                (category["label"], ("category", category["id"], 0)) for category in categories
-            ], private=True)
+            if categories:
+                view.select("All Categories", [
+                    (category["label"], ("category", category["id"], 0)) for category in categories
+                ], private=True)
             if ctx.guild:
                 view.button("Staff Help", ("staff",), row=2, private=True)
             return self.embed(menu, description="\n".join(lines)), view
@@ -182,26 +313,21 @@ class InteractiveFormatter(RedHelpFormatter):
                 return self.embed(menu, "Staff Help", "Choose a permission group."), view
         elif kind == "details":
             name, back = args
-            command = ctx.bot.get_command(name)
+            command = await self.find_command(ctx, name)
             if command:
-                _, level, hidden, override = self.policy(command, menu)
+                _, _, hidden, override = self.policy(command, menu)
+                level = self.detail_level(command, menu)
                 if (not hidden and (not level or private and level <= await self.level(ctx))
                         and await self.visible(ctx, command)):
-                    description = override.get("description") or command.format_help_for_context(ctx)
-                    embed = self.embed(menu, command.qualified_name[:256],
-                                       (description or "No description provided.")[:3400])
-                    signature = self.get_command_signature(ctx, command).strip()
-                    embed.add_field(name="Usage", value=discord.utils.escape_markdown(
-                        signature[:950]), inline=False)
-                    if override.get("example"):
-                        example = override["example"].replace("[p]", ctx.clean_prefix)
-                        embed.add_field(name="Example", value=example[:1000], inline=False)
+                    embed = self.command_embed(ctx, menu, command, override)
                     view.button("Back", back)
                     return embed, view
         else:
             key, index = args
             level = key if kind == "group" else 0
-            if not level or (private and level <= await self.level(ctx)):
+            owner_only = kind == "category" and key == "other"
+            required = 4 if owner_only else level
+            if not required or (private and required <= await self.level(ctx)):
                 category = key if kind == "category" else None
                 cog = key if kind == "cog" else None
                 rows = await self.entries(ctx, menu, level, category=category, cog=cog)
@@ -211,9 +337,10 @@ class InteractiveFormatter(RedHelpFormatter):
                 title = GROUP_LABELS[level] if level else labels.get(key, key)
                 lines = []
                 for command, override in current:
-                    summary = override.get("description") or command.short_doc or "View usage"
+                    summary = (override.get("description") or command.short_doc or "").strip()
+                    summary = summary.splitlines()[0] if summary else "View usage"
                     lines.append(f"**{discord.utils.escape_markdown(command.qualified_name)[:180]}**"
-                                 f" · {summary.splitlines()[0][:130]}")
+                                 f" · {summary[:130]}")
                 embed = self.embed(menu, title[:256], "\n".join(lines) or "No commands here.")
                 embed.set_footer(text=f"Page {index + 1} of {max_index + 1}")
                 if current:
@@ -222,7 +349,14 @@ class InteractiveFormatter(RedHelpFormatter):
                                                   (kind, key, index)))
                         for command, _ in current
                     ], private=True)
-                view.button("Back" if level else "Home", ("staff",) if level else ("home",))
+                if owner_only:
+                    view.button("Back", ("group", 4, 0))
+                elif level:
+                    view.button("Back", ("staff",))
+                    if level == 4:
+                        view.button("Other Commands", ("category", "other", 0))
+                else:
+                    view.button("Home", ("home",))
                 if index:
                     view.button("Previous", (kind, key, index - 1))
                 if index < max_index:
@@ -231,16 +365,64 @@ class InteractiveFormatter(RedHelpFormatter):
         view.button("Home", ("home",))
         return self.embed(menu, "Help unavailable", "No matching help entry is available."), view
 
+    def command_embed(self, ctx, menu, command, override):
+        if isinstance(command, CustomHelpCommand):
+            description = command.short_doc
+            signature = f"{ctx.clean_prefix}{command.qualified_name}"
+        else:
+            description = command.format_help_for_context(ctx)
+            signature = self.get_command_signature(ctx, command).strip()
+        description = override.get("description") or description
+        syntax = signature[:700].replace("```", "``\u200b`")
+        body = (description or "No description provided.")[:2800]
+        embed = discord.Embed(
+            description=f"**Syntax**\n```\n{syntax}\n```\n{body}",
+            colour=int(menu["colour"][1:], 16),
+        )
+        embed.set_author(name=menu["title"], icon_url=ctx.me.display_avatar.url)
+        embed.set_footer(text=f"Type {ctx.clean_prefix}help <command> for more info, or "
+                              f"{ctx.clean_prefix}help to browse categories.")
+        if override.get("example"):
+            example = override["example"].replace("[p]", ctx.clean_prefix)
+            embed.add_field(name="Example", value=example[:1000], inline=False)
+        return embed
+
+    async def send_invocation_help(self, ctx, menu, command):
+        _, level, _, override = self.policy(command, menu)
+        if level and level > await self.level(ctx):
+            await ctx.send("No matching help entry is available.")
+            return
+
+        embed = self.command_embed(ctx, menu, command, override)
+        if isinstance(command, commands.Group):
+            subcommands = []
+            for child in sorted(command.commands, key=lambda item: item.name):
+                _, child_level, hidden, _ = self.policy(child, menu)
+                if hidden or (child_level and child_level > await self.level(ctx)):
+                    continue
+                if await self.visible(ctx, child):
+                    subcommands.append(discord.utils.escape_markdown(child.name))
+            if subcommands:
+                summary = ", ".join(subcommands)
+                if len(summary) > 1000:
+                    summary = summary[:997].rsplit(", ", 1)[0] + "…"
+                embed.add_field(name="Subcommands", value=summary, inline=False)
+        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
     async def send_help(self, ctx, help_for=None, *, from_help_command=False):
         if ctx.guild and not ctx.channel.permissions_for(ctx.me).embed_links:
             await ctx.send("Interactive help requires the Embed Links permission in this channel.")
             return
-        menu = await self.cog.menu(ctx)
+        menu = await self.cog.menu()
         target = help_for
         if isinstance(target, str):
-            target = ctx.bot.get_command(" ".join(target.split())) or ctx.bot.get_cog(target)
-        if isinstance(target, commands.Command):
-            _, level, hidden, _ = self.policy(target, menu)
+            target = await self.find_command(ctx, " ".join(target.split())) or ctx.bot.get_cog(target)
+        if isinstance(target, (commands.Command, CustomHelpCommand)):
+            if not from_help_command and isinstance(target, commands.Command):
+                await self.send_invocation_help(ctx, menu, target)
+                return
+            _, _, hidden, _ = self.policy(target, menu)
+            level = self.detail_level(target, menu)
             if hidden or level > await self.level(ctx) or not await self.visible(ctx, target):
                 await ctx.send("No matching help entry is available.")
                 return
@@ -266,16 +448,17 @@ class InteractiveFormatter(RedHelpFormatter):
 
 
 class InteractiveHelp(commands.Cog):
-    """Interactive help and its owner-only server settings."""
+    """Interactive help and its owner-only global settings."""
 
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=941620174225037, force_registration=True)
-        self.config.register_guild(settings={"published": DEFAULT, "draft": None, "previous": None})
+        self.config.register_global(settings={})
         self.formatter = InteractiveFormatter(self)
         self.active = False
 
     async def cog_load(self):
+        await self.migrate_guild_menus()
         self.bot.set_help_formatter(self.formatter)
         self.active = True
 
@@ -285,50 +468,134 @@ class InteractiveHelp(commands.Cog):
             if getattr(self.bot, "_help_formatter", None) is self.formatter:
                 self.bot.reset_help_formatter()
 
-    def is_primary_owner(self, member):
-        return member.id == self.bot.owner_id
+    async def is_primary_owner(self, member):
+        # Red keeps the configured primary owner separately from its co-owner set.
+        owner_id = getattr(self.bot, "_owner_id_overwrite", None)
+        if owner_id is None:
+            application = self.bot.application
+            owner_id = getattr(getattr(application, "owner", None), "id", None)
+        return member.id == owner_id and await self.bot.is_owner(member)
 
     async def cog_check(self, ctx):
-        return ctx.guild is not None and self.is_primary_owner(ctx.author)
+        if not await self.is_primary_owner(ctx.author):
+            raise HelpMenuOwnerRequired()
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+        return True
 
-    async def menu(self, ctx):
-        if ctx.guild:
-            return (await self.config.guild(ctx.guild).settings())["published"]
-        return DEFAULT
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, HelpMenuOwnerRequired):
+            message = "Only the primary bot owner can manage the help menu."
+        elif isinstance(error, HelpMenuSettingsBusy):
+            message = "The help menu settings are busy. If this persists, restart Red and retry."
+        elif isinstance(error, commands.NoPrivateMessage):
+            message = "Run this command in any server to edit the global help menu."
+        elif isinstance(error, commands.UserInputError):
+            prefix = ctx.clean_prefix
+            command = ctx.command
+            usage = f"{prefix}{command.qualified_name} {command.signature}".rstrip()
+            message = f"{error}\nUsage: `{usage}`"
+        elif isinstance(error, commands.DisabledCommand):
+            message = "This help menu command is disabled."
+        elif isinstance(error, commands.CheckFailure):
+            message = "A Red permission check blocked this help menu command."
+        else:
+            original = getattr(error, "original", error)
+            log.error("Help menu command failed", exc_info=original)
+            message = "The help menu command failed. Check the Red console for details."
+        await ctx.send(message, allowed_mentions=discord.AllowedMentions.none())
+
+    async def menu(self):
+        return (await self.settings())["published"]
+
+    def legacy_state(self, data):
+        saved = data.get("settings", {})
+        return {
+            "published": saved.get("published") or DEFAULT,
+            "draft": saved.get("draft") or {},
+            "previous": saved.get("previous") or {},
+        }
+
+    async def migrate_guild_menus(self):
+        async with self.writable_settings() as state:
+            if state["migrated"]:
+                return
+            candidates = []
+            for guild_data in (await self.config.all_guilds()).values():
+                legacy = self.legacy_state(guild_data)
+                if legacy["published"] != DEFAULT or legacy["draft"] or legacy["previous"]:
+                    candidates.append(legacy)
+            if candidates and all(candidate == candidates[0] for candidate in candidates):
+                state.update(candidates[0])
+            elif candidates:
+                log.warning(
+                    "Multiple legacy help menus differ. Use helpmenu migrate in the source "
+                    "server, then publish the draft to make it global."
+                )
+            state["migrated"] = True
 
     def draft(self, state):
-        return state["draft"] if state["draft"] is not None else state["published"]
+        return state["draft"] or state["published"]
 
-    def settings(self, ctx):
-        return self.config.guild(ctx.guild).settings
+    def settings(self, *, acquire_lock=True):
+        defaults = {"published": copy.deepcopy(DEFAULT), "draft": {}, "previous": {},
+                    "migrated": False}
+        return self.config.settings(default=defaults, acquire_lock=acquire_lock)
+
+    @asynccontextmanager
+    async def writable_settings(self):
+        lock = self.config.settings.get_lock()
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=10)
+        except asyncio.TimeoutError as error:
+            raise HelpMenuSettingsBusy() from error
+        try:
+            async with self.settings(acquire_lock=False) as state:
+                yield state
+        finally:
+            lock.release()
+
+    @app_commands.command(name="help", description="Browse the interactive help menu.")
+    @app_commands.describe(command="A prefix command or tag to look up")
+    async def slash_help(self, interaction: discord.Interaction, command: str = None):
+        await interaction.response.defer()
+        ctx = await self.bot.get_context(interaction)
+        prefixes = await self.bot.get_valid_prefixes(interaction.guild)
+        ctx.prefix = prefixes[0] if prefixes else ""
+        await self.formatter.send_help(ctx, command, from_help_command=True)
 
     @commands.group(name="helpmenu", invoke_without_command=True)
-    @commands.guild_only()
-    @commands.check(lambda ctx: ctx.cog.is_primary_owner(ctx.author))
     async def helpmenu(self, ctx):
-        """Edit and publish this server's help menu."""
+        """Edit and publish the bot-wide help menu."""
         prefix = ctx.clean_prefix
+        if ctx.subcommand_passed and ctx.invoked_subcommand is None:
+            await ctx.send(f"Unknown help menu command. Use `{prefix}helpmenu` to see the options.")
+            return
         await ctx.send(
-            f"**Help Menu Editor**\n"
+            f"**Global Help Menu Editor**\n"
             f"\x60{prefix}helpmenu title <text>\x60 · Set the title\n"
             f"\x60{prefix}helpmenu intro <text>\x60 · Set the introduction\n"
             f"\x60{prefix}helpmenu colour <#RRGGBB>\x60 · Set the accent\n"
             f"\x60{prefix}helpmenu category <id> <true|false> <label>\x60 · Add or rename a category\n"
             f"\x60{prefix}helpmenu assign <category> <group> <command>\x60 · Assign a command\n"
             f"\x60{prefix}helpmenu preview\x60 / \x60publish\x60 / \x60rollback\x60\n"
-            f"\x60{prefix}helpmenu export [published|draft]\x60 / \x60import\x60 (attach JSON)"
+            f"\x60{prefix}helpmenu export [published|draft]\x60 / \x60import\x60 (attach JSON)\n"
+            f"\x60{prefix}helpmenu migrate [published|draft]\x60 · Stage a legacy server menu"
         )
 
     async def edit_draft(self, ctx, edit):
         try:
-            async with self.settings(ctx)() as state:
+            async with self.writable_settings() as state:
                 menu = copy.deepcopy(self.draft(state))
                 edit(menu)
                 state["draft"] = validate(menu)
         except ValueError as exc:
             await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
             return
-        await ctx.send("Draft updated. Use helpmenu preview or helpmenu publish.")
+        await ctx.send(
+            f"Draft updated. Use `{ctx.clean_prefix}helpmenu preview` to review it "
+            f"or `{ctx.clean_prefix}helpmenu publish` to make it live."
+        )
 
     @helpmenu.command()
     async def title(self, ctx, *, title: str):
@@ -340,7 +607,7 @@ class InteractiveHelp(commands.Cog):
         """Set or clear the draft introduction."""
         await self.edit_draft(ctx, lambda menu: menu.update(intro=intro))
 
-    @helpmenu.command()
+    @helpmenu.command(aliases=["color"])
     async def colour(self, ctx, colour: str):
         """Set the draft accent colour."""
         await self.edit_draft(ctx, lambda menu: menu.update(colour=colour))
@@ -362,7 +629,10 @@ class InteractiveHelp(commands.Cog):
     @helpmenu.command()
     async def assign(self, ctx, category_id: str, group: str, *, command_name: str):
         """Assign a command to a category and set its minimum help access."""
-        command = ctx.bot.get_command(command_name)
+        if group not in GROUPS:
+            await ctx.send("Choose public, moderator, administrator, guild_owner, or bot_owner.")
+            return
+        command = await self.formatter.find_command(ctx, command_name)
         if command is None:
             await ctx.send("That command could not be found.")
             return
@@ -370,17 +640,24 @@ class InteractiveHelp(commands.Cog):
         def edit(menu):
             entry = menu["overrides"].setdefault(command.qualified_name, {})
             entry.update(category=category_id, group=group)
+            staff = menu.get("staff")
+            if staff is not None:
+                for names in staff.values():
+                    if command.qualified_name in names:
+                        names.remove(command.qualified_name)
+                if group != "public":
+                    staff.setdefault(group, []).append(command.qualified_name)
 
         await self.edit_draft(ctx, edit)
 
     @helpmenu.command()
     async def preview(self, ctx):
         """Review the draft home screen in a DM."""
-        menu = self.draft(await self.settings(ctx)())
+        menu = self.draft(await self.settings())
         embed, _ = await self.formatter.render(ctx, menu, ("home",))
         pinned = [cat["label"] for cat in menu["categories"] if cat["pinned"]]
         embed.add_field(name="Pinned categories", value=("\n".join(pinned) or "None"))
-        embed.set_footer(text=f"Draft · {ctx.guild.name}"[:200])
+        embed.set_footer(text="Global draft")
         try:
             await ctx.author.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         except discord.Forbidden:
@@ -394,8 +671,31 @@ class InteractiveHelp(commands.Cog):
         if source not in {"published", "draft"}:
             await ctx.send("Choose published or draft.")
             return
-        state = await self.settings(ctx)()
+        state = await self.settings()
         data = state["published"] if source == "published" else self.draft(state)
+        data = copy.deepcopy(data)
+        known = await self.formatter.known_commands(ctx)
+        if "staff" not in data:
+            staff = {group: set() for group in GROUPS[1:]}
+            commands_by_name = {command.qualified_name for command in known}
+            for command in known:
+                _, level, hidden, _ = self.formatter.policy(command, data)
+                if level and not hidden:
+                    staff[GROUPS[level]].add(command.qualified_name)
+            for name, override in data["overrides"].items():
+                group = override.get("group", "public")
+                if name not in commands_by_name and group != "public" and not override.get("hidden"):
+                    staff[group].add(name)
+            data["staff"] = {group: sorted(names) for group, names in staff.items()}
+        for command in known:
+            _, _, hidden, override = self.formatter.policy(command, data)
+            if hidden or "description" in override:
+                continue
+            description = (command.short_doc or "").strip()
+            if description:
+                data["overrides"].setdefault(command.qualified_name, {})["description"] = (
+                    description[:800]
+                )
         payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
         try:
             await ctx.author.send(file=discord.File(io.BytesIO(payload), "help-menu.json"))
@@ -415,9 +715,36 @@ class InteractiveHelp(commands.Cog):
             await ctx.send("Attach a JSON file of 256 KiB or less.")
             return
         try:
-            data = validate(json.loads((await attachment.read()).decode("utf-8-sig")))
-        except (ValueError, RecursionError, discord.HTTPException):
-            await ctx.send("The attachment could not be read as a valid version 1 menu.")
+            payload = await asyncio.wait_for(attachment.read(), timeout=20)
+        except asyncio.TimeoutError:
+            await ctx.send("Discord took too long to download the JSON file. Attach it again and retry.")
+            return
+        except discord.HTTPException as error:
+            log.warning("Help menu attachment download failed (HTTP %s)", error.status)
+            await ctx.send(
+                "Discord could not download the attachment. Attach the file directly to a new "
+                "import command and try again."
+            )
+            return
+
+        try:
+            menu = json.loads(payload.decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            await ctx.send("Save the JSON file as UTF-8 and try again.")
+            return
+        except json.JSONDecodeError as error:
+            await ctx.send(
+                f"Invalid JSON at line {error.lineno}, column {error.colno}. {error.msg}."
+            )
+            return
+        except (RecursionError, ValueError):
+            await ctx.send("The JSON is too deeply nested or contains a number that is too large.")
+            return
+
+        try:
+            data = validate(menu)
+        except ValueError as error:
+            await ctx.send(f"Invalid help menu. {error}", allowed_mentions=discord.AllowedMentions.none())
             return
 
         def edit(menu):
@@ -426,7 +753,10 @@ class InteractiveHelp(commands.Cog):
 
         unknown = {name for category in data["categories"] for name in category["commands"]}
         unknown.update(data["overrides"])
-        missing = sum(ctx.bot.get_command(name) is None for name in unknown)
+        for names in data.get("staff", {}).values():
+            unknown.update(names)
+        custom = await self.formatter.custom_commands(ctx)
+        missing = sum(ctx.bot.get_command(name) is None and name not in custom for name in unknown)
         missing_cogs = {name for category in data["categories"] for name in category["cogs"]
                         if ctx.bot.get_cog(name) is None}
         await self.edit_draft(ctx, edit)
@@ -435,19 +765,37 @@ class InteractiveHelp(commands.Cog):
                            f"{len(missing_cogs)} unloaded cog(s).")
 
     @helpmenu.command()
+    async def migrate(self, ctx, source: str = "published"):
+        """Stage a legacy server menu as the global draft."""
+        if source not in {"published", "draft"}:
+            await ctx.send("Choose published or draft.")
+            return
+        data = await self.config.guild(ctx.guild).get_raw("settings", default=None)
+        menu = data.get(source) if data else None
+        if not menu:
+            await ctx.send("This server has no saved legacy menu for that option.")
+            return
+
+        def edit(draft):
+            draft.clear()
+            draft.update(menu)
+
+        await self.edit_draft(ctx, edit)
+
+    @helpmenu.command()
     async def publish(self, ctx):
         """Make the current draft live."""
-        async with self.settings(ctx)() as state:
-            changed = state["draft"] is not None
+        async with self.writable_settings() as state:
+            changed = bool(state["draft"])
             if changed:
-                state.update(previous=state["published"], published=state["draft"], draft=None)
-        await ctx.send("Help menu published." if changed else "There is no draft to publish.")
+                state.update(previous=state["published"], published=state["draft"], draft={})
+        await ctx.send("Help menu published to all servers." if changed else "There is no draft to publish.")
 
     @helpmenu.command()
     async def rollback(self, ctx):
         """Restore the previous published menu."""
-        async with self.settings(ctx)() as state:
-            changed = state["previous"] is not None
+        async with self.writable_settings() as state:
+            changed = bool(state["previous"])
             if changed:
                 state["published"], state["previous"] = state["previous"], state["published"]
         await ctx.send("Previous help menu restored." if changed else "No previous menu is saved.")
