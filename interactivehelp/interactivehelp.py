@@ -15,6 +15,11 @@ from .settings import DEFAULT, GROUPS, GROUP_LABELS, validate
 
 log = logging.getLogger("red.kermitai.interactivehelp")
 CUSTOM_EMOJI_PREFIX = re.compile(r"^<a?:(?P<name>\w+):(?P<id>[0-9]{1,20})>\s*")
+UNICODE_EMOJI_PREFIX = re.compile(
+    r"^([\U0001F000-\U0001FAFF\u2194-\u21FF\u2300-\u23FF\u25A0-\u27BF\u2B00-\u2BFF]"
+    r"(?:[\ufe0f\U0001F3FB-\U0001F3FF\u200d\U0001F000-\U0001FAFF\u2194-\u21FF"
+    r"\u2300-\u23FF\u25A0-\u27BF\u2B00-\u2BFF])*)\s+"
+)
 
 
 class HelpMenuSettingsBusy(commands.CommandError):
@@ -93,10 +98,14 @@ class MenuView(discord.ui.View):
 
     def component_label(self, label):
         match = CUSTOM_EMOJI_PREFIX.match(label)
-        if match is None:
-            return label, None
-        emoji = self.ctx.bot.get_emoji(int(match["id"]))
-        return label[match.end():] or match["name"], emoji if emoji and emoji.is_usable() else None
+        if match:
+            emoji = self.ctx.bot.get_emoji(int(match["id"]))
+            return label[match.end():] or match["name"], emoji if emoji and emoji.is_usable() else None
+
+        match = UNICODE_EMOJI_PREFIX.match(label)
+        if match and label[match.end():]:
+            return label[match.end():], match[1]
+        return label, None
 
     def button(self, label, page, *, row=0, primary=False, private=False):
         style = discord.ButtonStyle.primary if primary else discord.ButtonStyle.secondary
@@ -147,7 +156,7 @@ class InteractiveFormatter(RedHelpFormatter):
         while command:
             chain.append(command)
             command = command.parent
-        level = 4 if command.cog is self.cog else 0
+        level = 4 if chain[0].cog is self.cog else 0
         hidden = False
         override = {}
         explicit_category = None
