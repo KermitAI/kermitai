@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import discord
+from discord import app_commands
 from redbot.core import Config, commands
 from redbot.core.commands.help import RedHelpFormatter
 
@@ -177,16 +178,23 @@ class InteractiveFormatter(RedHelpFormatter):
         hidden = False
         override = {}
         explicit_category = None
+        staff = menu.get("staff")
         for item in reversed(chain):
             override = menu["overrides"].get(item.qualified_name, {})
             if "category" in override:
                 explicit_category = override["category"]
             privilege = getattr(getattr(item, "requires", None), "privilege_level", None)
-            level = max(level, GROUPS.index(override.get("group", "public")), {
+            group = override.get("group", "public")
+            if staff is not None:
+                group = next((key for key, names in staff.items() if item.qualified_name in names),
+                             group)
+            level = max(level, GROUPS.index(group), {
                 "MOD": 1, "ADMIN": 2, "GUILD_OWNER": 3, "BOT_OWNER": 4,
             }.get(getattr(privilege, "name", ""), 0))
             hidden |= override.get("hidden", False) or item.hidden
         item = chain[0]
+        if staff is not None and level:
+            hidden |= not any(item.qualified_name in names for names in staff.values())
         if explicit_category is not None:
             return explicit_category, level, hidden, override
         for candidate in chain:
@@ -251,11 +259,14 @@ class InteractiveFormatter(RedHelpFormatter):
             return False
         return True
 
-    async def entries(self, ctx, menu, target_level, category=None, cog=None):
-        result = []
+    async def known_commands(self, ctx):
         registered = set(ctx.bot.walk_commands())
         custom = await self.custom_commands(ctx)
-        for command in sorted([*registered, *custom.values()], key=lambda item: item.qualified_name):
+        return sorted([*registered, *custom.values()], key=lambda item: item.qualified_name)
+
+    async def entries(self, ctx, menu, target_level, category=None, cog=None):
+        result = []
+        for command in await self.known_commands(ctx):
             key, level, hidden, override = self.policy(command, menu)
             if hidden or level != target_level or (category and category != key):
                 continue
@@ -510,6 +521,15 @@ class InteractiveHelp(commands.Cog):
         finally:
             lock.release()
 
+    @app_commands.command(name="help", description="Browse the interactive help menu.")
+    @app_commands.describe(command="A prefix command or tag to look up")
+    async def slash_help(self, interaction: discord.Interaction, command: str = None):
+        await interaction.response.defer()
+        ctx = await self.bot.get_context(interaction)
+        prefixes = await self.bot.get_valid_prefixes(interaction.guild)
+        ctx.prefix = prefixes[0] if prefixes else ""
+        await self.formatter.send_help(ctx, command, from_help_command=True)
+
     @commands.group(name="helpmenu", invoke_without_command=True)
     async def helpmenu(self, ctx):
         """Edit and publish the bot-wide help menu."""
@@ -575,6 +595,9 @@ class InteractiveHelp(commands.Cog):
     @helpmenu.command()
     async def assign(self, ctx, category_id: str, group: str, *, command_name: str):
         """Assign a command to a category and set its minimum help access."""
+        if group not in GROUPS:
+            await ctx.send("Choose public, moderator, administrator, guild_owner, or bot_owner.")
+            return
         command = await self.formatter.find_command(ctx, command_name)
         if command is None:
             await ctx.send("That command could not be found.")
@@ -583,6 +606,13 @@ class InteractiveHelp(commands.Cog):
         def edit(menu):
             entry = menu["overrides"].setdefault(command.qualified_name, {})
             entry.update(category=category_id, group=group)
+            staff = menu.get("staff")
+            if staff is not None:
+                for names in staff.values():
+                    if command.qualified_name in names:
+                        names.remove(command.qualified_name)
+                if group != "public":
+                    staff.setdefault(group, []).append(command.qualified_name)
 
         await self.edit_draft(ctx, edit)
 
@@ -609,6 +639,20 @@ class InteractiveHelp(commands.Cog):
             return
         state = await self.settings()
         data = state["published"] if source == "published" else self.draft(state)
+        data = copy.deepcopy(data)
+        if "staff" not in data:
+            staff = {group: set() for group in GROUPS[1:]}
+            known = await self.formatter.known_commands(ctx)
+            commands_by_name = {command.qualified_name for command in known}
+            for command in known:
+                _, level, hidden, _ = self.formatter.policy(command, data)
+                if level and not hidden:
+                    staff[GROUPS[level]].add(command.qualified_name)
+            for name, override in data["overrides"].items():
+                group = override.get("group", "public")
+                if name not in commands_by_name and group != "public" and not override.get("hidden"):
+                    staff[group].add(name)
+            data["staff"] = {group: sorted(names) for group, names in staff.items()}
         payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
         try:
             await ctx.author.send(file=discord.File(io.BytesIO(payload), "help-menu.json"))
@@ -666,6 +710,8 @@ class InteractiveHelp(commands.Cog):
 
         unknown = {name for category in data["categories"] for name in category["commands"]}
         unknown.update(data["overrides"])
+        for names in data.get("staff", {}).values():
+            unknown.update(names)
         custom = await self.formatter.custom_commands(ctx)
         missing = sum(ctx.bot.get_command(name) is None and name not in custom for name in unknown)
         missing_cogs = {name for category in data["categories"] for name in category["cogs"]
