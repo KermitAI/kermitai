@@ -7,7 +7,8 @@ Red's formatter if InteractiveHelp still controls it.
 
 ## Member experience
 
-- `[p]help` opens a dashboard in the current channel.
+- `[p]help` and `/help` open the same dashboard in the current channel.
+- Use `/help command:<name>` for command or tag details. After updating and reloading the cog, enable `/help` with `[p]slash enablecog InteractiveHelp` and run `[p]slash sync`.
 - Category buttons and the All Categories dropdown open private pages for
   the member who requested help. Pages include command details and navigation.
 - `[p]help gift shop` opens a control for viewing that command's help privately.
@@ -59,5 +60,13 @@ the current prefix. The reserved category ID `other` collects unassigned
 commands. Protect any imported menu file containing staff command names by
 posting it in a channel visible only to trusted staff.
 
-The draft focuses on prefix command discovery and prefix-based owner editing.
+The export includes a `staff` object with `bot_owner`, `guild_owner`,
+`administrator`, and `moderator` command lists. The first export populates
+these with discovered staff commands. After importing an edited list, the
+staff pages use those assignments. Add a new command or tag by its full name,
+move a name to another list, or delete the name to omit it from the staff
+pages. Use `overrides.<command>.hidden` to hide an entry everywhere.
+Red still enforces built-in privileges and command checks. New staff commands
+can be added to an imported list by editing the JSON or with `helpmenu assign`.
+The owner-only Other Commands page remains the fallback for unassigned entries.
 
