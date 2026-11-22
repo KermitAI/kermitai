@@ -373,10 +373,15 @@ class InteractiveFormatter(RedHelpFormatter):
             description = command.format_help_for_context(ctx)
             signature = self.get_command_signature(ctx, command).strip()
         description = override.get("description") or description
-        embed = self.embed(menu, command.qualified_name[:256],
-                           (description or "No description provided.")[:3400])
-        embed.add_field(name="Usage", value=discord.utils.escape_markdown(
-            signature[:950]), inline=False)
+        syntax = signature[:700].replace("```", "``\u200b`")
+        body = (description or "No description provided.")[:2800]
+        embed = discord.Embed(
+            description=f"**Syntax**\n```\n{syntax}\n```\n{body}",
+            colour=int(menu["colour"][1:], 16),
+        )
+        embed.set_author(name=menu["title"], icon_url=ctx.me.display_avatar.url)
+        embed.set_footer(text=f"Type {ctx.clean_prefix}help <command> for more info, or "
+                              f"{ctx.clean_prefix}help to browse categories.")
         if override.get("example"):
             example = override["example"].replace("[p]", ctx.clean_prefix)
             embed.add_field(name="Example", value=example[:1000], inline=False)
