@@ -35,7 +35,7 @@ def check_keys(value, required, optional=()):
 
 
 def validate(menu):
-    check_keys(menu, DEFAULT)
+    check_keys(menu, DEFAULT, ("staff",))
     if type(menu["version"]) is not int or menu["version"] != 1:
         raise ValueError("Only menu version 1 is supported.")
     string(menu["title"], "Title", 100)
@@ -78,5 +78,17 @@ def validate(menu):
             raise ValueError("An override refers to an unknown category.")
         string(entry.get("description", ""), "Description", 800, empty=True)
         string(entry.get("example", ""), "Example", 450, empty=True)
+    if "staff" in menu:
+        staff = menu["staff"]
+        check_keys(staff, (), GROUPS[1:])
+        assigned = set()
+        for group, names in staff.items():
+            if not isinstance(names, list):
+                raise ValueError(f"Staff group {group} must be a list of command names.")
+            for name in names:
+                string(name, "Staff command", 150)
+                if name in assigned:
+                    raise ValueError("List each staff command only once across all staff groups.")
+                assigned.add(name)
     return menu
 
