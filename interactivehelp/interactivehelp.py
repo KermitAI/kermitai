@@ -319,20 +319,7 @@ class InteractiveFormatter(RedHelpFormatter):
                 level = self.detail_level(command, menu)
                 if (not hidden and (not level or private and level <= await self.level(ctx))
                         and await self.visible(ctx, command)):
-                    if isinstance(command, CustomHelpCommand):
-                        description = command.short_doc
-                        signature = f"{ctx.clean_prefix}{command.qualified_name}"
-                    else:
-                        description = command.format_help_for_context(ctx)
-                        signature = self.get_command_signature(ctx, command).strip()
-                    description = override.get("description") or description
-                    embed = self.embed(menu, command.qualified_name[:256],
-                                       (description or "No description provided.")[:3400])
-                    embed.add_field(name="Usage", value=discord.utils.escape_markdown(
-                        signature[:950]), inline=False)
-                    if override.get("example"):
-                        example = override["example"].replace("[p]", ctx.clean_prefix)
-                        embed.add_field(name="Example", value=example[:1000], inline=False)
+                    embed = self.command_embed(ctx, menu, command, override)
                     view.button("Back", back)
                     return embed, view
         else:
@@ -378,6 +365,45 @@ class InteractiveFormatter(RedHelpFormatter):
         view.button("Home", ("home",))
         return self.embed(menu, "Help unavailable", "No matching help entry is available."), view
 
+    def command_embed(self, ctx, menu, command, override):
+        if isinstance(command, CustomHelpCommand):
+            description = command.short_doc
+            signature = f"{ctx.clean_prefix}{command.qualified_name}"
+        else:
+            description = command.format_help_for_context(ctx)
+            signature = self.get_command_signature(ctx, command).strip()
+        description = override.get("description") or description
+        embed = self.embed(menu, command.qualified_name[:256],
+                           (description or "No description provided.")[:3400])
+        embed.add_field(name="Usage", value=discord.utils.escape_markdown(
+            signature[:950]), inline=False)
+        if override.get("example"):
+            example = override["example"].replace("[p]", ctx.clean_prefix)
+            embed.add_field(name="Example", value=example[:1000], inline=False)
+        return embed
+
+    async def send_invocation_help(self, ctx, menu, command):
+        _, level, _, override = self.policy(command, menu)
+        if level and level > await self.level(ctx):
+            await ctx.send("No matching help entry is available.")
+            return
+
+        embed = self.command_embed(ctx, menu, command, override)
+        if isinstance(command, commands.Group):
+            subcommands = []
+            for child in sorted(command.commands, key=lambda item: item.name):
+                _, child_level, hidden, _ = self.policy(child, menu)
+                if hidden or (child_level and child_level > await self.level(ctx)):
+                    continue
+                if await self.visible(ctx, child):
+                    subcommands.append(discord.utils.escape_markdown(child.name))
+            if subcommands:
+                summary = ", ".join(subcommands)
+                if len(summary) > 1000:
+                    summary = summary[:997].rsplit(", ", 1)[0] + "…"
+                embed.add_field(name="Subcommands", value=summary, inline=False)
+        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
     async def send_help(self, ctx, help_for=None, *, from_help_command=False):
         if ctx.guild and not ctx.channel.permissions_for(ctx.me).embed_links:
             await ctx.send("Interactive help requires the Embed Links permission in this channel.")
@@ -387,6 +413,9 @@ class InteractiveFormatter(RedHelpFormatter):
         if isinstance(target, str):
             target = await self.find_command(ctx, " ".join(target.split())) or ctx.bot.get_cog(target)
         if isinstance(target, (commands.Command, CustomHelpCommand)):
+            if not from_help_command and isinstance(target, commands.Command):
+                await self.send_invocation_help(ctx, menu, target)
+                return
             _, _, hidden, _ = self.policy(target, menu)
             level = self.detail_level(target, menu)
             if hidden or level > await self.level(ctx) or not await self.visible(ctx, target):
