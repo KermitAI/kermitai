@@ -640,9 +640,9 @@ class InteractiveHelp(commands.Cog):
         state = await self.settings()
         data = state["published"] if source == "published" else self.draft(state)
         data = copy.deepcopy(data)
+        known = await self.formatter.known_commands(ctx)
         if "staff" not in data:
             staff = {group: set() for group in GROUPS[1:]}
-            known = await self.formatter.known_commands(ctx)
             commands_by_name = {command.qualified_name for command in known}
             for command in known:
                 _, level, hidden, _ = self.formatter.policy(command, data)
@@ -653,6 +653,15 @@ class InteractiveHelp(commands.Cog):
                 if name not in commands_by_name and group != "public" and not override.get("hidden"):
                     staff[group].add(name)
             data["staff"] = {group: sorted(names) for group, names in staff.items()}
+        for command in known:
+            _, _, hidden, override = self.formatter.policy(command, data)
+            if hidden or "description" in override:
+                continue
+            description = (command.short_doc or "").strip()
+            if description:
+                data["overrides"].setdefault(command.qualified_name, {})["description"] = (
+                    description[:800]
+                )
         payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
         try:
             await ctx.author.send(file=discord.File(io.BytesIO(payload), "help-menu.json"))
