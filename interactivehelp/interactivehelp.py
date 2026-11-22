@@ -35,10 +35,10 @@ class HelpMenuOwnerRequired(commands.CheckFailure):
 class CustomHelpCommand:
     qualified_name: str
     cog: commands.Cog
+    short_doc: str = "Server custom command"
 
     parent = None
     hidden = False
-    short_doc = "Server custom command"
 
     @property
     def cog_name(self):
@@ -199,6 +199,21 @@ class InteractiveFormatter(RedHelpFormatter):
         return "other", level, hidden, override
 
     async def custom_commands(self, ctx):
+        tags = ctx.bot.get_cog("Tags")
+        get_unique_tags = getattr(tags, "get_unique_tags", None)
+        if callable(get_unique_tags):
+            invoke = ctx.bot.get_command("invoketag")
+            if invoke is not None and invoke.cog is tags and await self.visible(ctx, invoke):
+                scopes = (None, ctx.guild) if ctx.guild else (None,)
+                names = {
+                    name
+                    for guild in scopes
+                    for tag in get_unique_tags(guild)
+                    for name in (tag.name, *tag.aliases)
+                }
+                return {name: CustomHelpCommand(name, tags, "Tag command")
+                        for name in names if ctx.bot.get_command(name) is None}
+
         cog = ctx.bot.get_cog("CustomCommands")
         if ctx.guild is None or cog is None or await ctx.bot.cog_disabled_in_guild(cog, ctx.guild):
             return {}
