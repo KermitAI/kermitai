@@ -3,8 +3,8 @@
     "LadyLeigh"
   ],
   "name": "TwitchBridge",
-  "short": "Twitch connections, shared commands, announcements and chat logs.",
-  "description": "Custom Twitch/Discord bridge with command-free persistent linking panels, verified member accounts, per-broadcaster roles, shoutouts, shared commands, native announcements and chat logs.",
+  "short": "Twitch chat, commands, events, roles and account linking.",
+  "description": "Custom Twitch/Discord bridge with timers, shared to-dos, counters, stream variables, ad controls, word triggers, greetings, attendance streaks, channel events, roles and verified account linking. Includes moderator controls for stream title, category/game, tags and language.",
   "min_bot_version": "3.5.0",
   "requirements": [
     "aiohttp>=3.9.0,<4"
@@ -13,5 +13,5 @@
     "twitch",
     "logging"
   ],
-  "end_user_data_statement": "Stores per-server Discord/Twitch identity links and timestamps, broadcaster and bot OAuth tokens, channel/role settings and integration-owned role grants. Pending verification codes and cooldowns are in memory. Supports member unlink and Red data deletion. Existing mirrored Discord chat logs have independent retention. Stores linking-panel message IDs and configuration. Identity-only member approval tokens are transient, revoked after use, and never saved."
+  "end_user_data_statement": "Stores per-server Discord/Twitch identity links and timestamps, broadcaster and bot OAuth tokens, channel/role settings and integration-owned role grants. Pending verification codes and cooldowns are in memory. Supports member unlink and Red data deletion. Existing mirrored Discord chat logs have independent retention. Stores linking-panel message IDs and configuration. Identity-only member approval tokens are transient, revoked after use, and never saved. Channel-event payloads, deduplication IDs and delivery counters are held in memory only; event templates and enable settings are saved per server. Stores shared to-do text, response counters, automation settings, ad-warning receipts, and per-broadcaster Twitch IDs with streak/first-message attendance data. Linked Discord deletion and owner Twitch-forget commands remove attendance data."
 }

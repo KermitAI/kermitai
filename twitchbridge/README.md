@@ -24,7 +24,9 @@ token to the account approving it; a bot account cannot grant broadcaster access
   `moderator:manage:announcements`, `moderator:manage:shoutouts`, `user:bot`.
 - Broadcaster bundle: `user:read:chat`, `moderation:read`,
   `channel:read:subscriptions`, `channel:read:vips`, `channel:bot`,
-  `channel:read:redemptions`, `channel:manage:redemptions`.
+  `channel:read:redemptions`, `channel:manage:redemptions`, `bits:read`,
+  `moderator:read:followers`, `channel:read:ads`, `channel:manage:ads`,
+  `channel:edit:commercial`, `channel:manage:broadcast`.
 
 These cover current and already-planned Paimon capabilities. Native shoutout-card
 and redemption permissions are reserved; these integrations remain deferred.
@@ -475,3 +477,427 @@ References:
 https://docs.discord.com/developers/topics/oauth2#shared-resources-oauth2-scopes
 https://discordpy.readthedocs.io/en/stable/interactions/api.html#discord.ui.View
 https://discuss.dev.twitch.com/t/public-client-device-code-flow-support-for-empty-oauth-scopes/65202
+
+
+## Channel event messages
+
+Event messages are independent of member linking, roles and crates. Each linked
+broadcaster has a separate event listener, permission check and configuration.
+Nothing is announced until the owner opts in for that broadcaster's server.
+
+After updating/reloading the cog, authorize the broadcaster once for follows and
+cheers (the bundle now includes `moderator:read:followers` and `bits:read`):
+
+```
+[p]twitchevents authorize
+[p]twitchevents preview follow
+[p]twitchevents enabled true
+[p]twitchevents status
+```
+
+Approve the DM as **the broadcaster**, not Paimon's account. Existing subscription
+permission is `channel:read:subscriptions`. No additional bot approval is needed
+if chat replies and announcements already work. Existing broadcaster approvals
+remain usable for event types they already cover. Missing scopes are shown per
+event type; they do not stop chat logging or the other available events.
+
+### Supported events and placeholders
+
+| Event name | Behavior | Available placeholders |
+| --- | --- | --- |
+| `follow` | Thank a new follower | `{user}`, `{channel}`, `{url}` |
+| `subscribe` | Thank a new non-gift subscriber | `{user}`, `{channel}`, `{url}`, `{tier}` |
+| `resub` | Thank someone who shares a resubscription message | `{user}`, `{channel}`, `{url}`, `{tier}`, `{months}`, `{message}` |
+| `gift` | Thank the gifter once for the gift summary | `{user}`, `{channel}`, `{url}`, `{tier}`, `{count}` |
+| `cheer` | Thank a Bits cheer | `{user}`, `{channel}`, `{url}`, `{bits}`, `{message}` |
+| `raid` | Welcome an incoming raid | `{user}`, `{channel}`, `{url}`, `{viewers}` |
+
+`{user}` is the event's actor; for raids it is the incoming broadcaster. `{url}` is
+that actor's Twitch URL. Anonymous gifts and cheers use `Anonymous` and an empty
+URL, regardless of any identity fields in the payload. Tier is 1, 2 or 3; months
+is cumulative subscription months. Gift recipients are skipped by `subscribe`
+to avoid duplicating the gift summary. Disabling `gift` therefore suppresses gift
+acknowledgements altogether. Silent subscription renewals do not generate shared
+resub messages. Refollows or suspected follow spam may be suppressed by Twitch.
+
+### Configure messages in the broadcaster's Discord server
+
+All commands below require bot-owner access:
+
+```
+[p]twitchevents message follow Welcome {user}! Thanks for following {channel}!
+[p]twitchevents message subscribe Thank you for subscribing, {user}!
+[p]twitchevents message resub Thanks for {months} months, {user}!
+[p]twitchevents message gift Thank you {user} for gifting {count} subs!
+[p]twitchevents message cheer Thank you {user} for {bits} Bits!
+[p]twitchevents message raid Welcome {user} and your {viewers} raiders! Follow them at {url}!
+[p]twitchevents preview raid
+[p]twitchevents event follow true
+[p]twitchevents event cheer false
+[p]twitchevents cooldown follow 5
+[p]twitchevents mode chat
+[p]twitchevents mode announcement
+[p]twitchevents enabled false
+```
+
+- All six types have default messages and start selected, but the overall event
+  feature is off by default. `enabled true` opts in to all currently selected types.
+- `event <type> true/false` selects individual event types.
+- `message <type> <text>` saves a template; unknown placeholders, formatting
+  expressions, and templates over 500 characters are rejected. Expanded messages
+  are normalized to a single line and truncated to 500 characters when necessary.
+- `preview <type>` sends an example to the invoking Discord channel only. It never
+  fabricates a live Twitch event or sends a message to Twitch.
+- `cooldown <type> <seconds>` sets a per-broadcaster, per-event delivery cooldown
+  from 0-86400 seconds (default 0). Events arriving during cooldown are dropped,
+  not combined or replayed later.
+- `mode chat` is the default. `mode announcement` sends native Twitch banners
+  using the existing announcement color and requires the bot's announcement scope
+  and moderator status. This choice is separate for each broadcaster.
+- `status` shows the event connection, active/failed subscription types, last
+  delivery result and queued/sent/dropped counters since cog load.
+- `twitchset enabled false` pauses all event responses too. Changing broadcasters,
+  changing event settings or disabling an event invalidates its old queued events.
+
+### Delivery and connection behavior
+
+These are separate broadcaster-authorized EventSub WebSockets, so a follow/sub
+permission issue cannot disconnect the bot-authorized command/chat logger. Each
+broadcaster's scope and subscription failures are reported separately. One failed
+subscription (for example, subscriptions unavailable on that channel) does not
+remove successful follow/raid subscriptions. Reconnection recreates subscriptions
+on a lost socket, while Twitch-requested handoffs transfer them without duplicates.
+
+Outgoing replies share the existing 2.1-second send limiter with commands and
+announcements. Event delivery has a separate 200-item global queue. Duplicate
+EventSub IDs are suppressed by a bounded in-memory cache; gift recipient events
+are suppressed in favor of the gift summary. Events older than two minutes, queue
+overflow, cooldown drops and rejected sends increment the dropped counter.
+Network-ambiguous sends are not automatically retried. Queues, counters and event
+payloads are memory-only and reset on reload; no persistent event archive is made.
+
+No historical follows or subscriber lists are announced at startup. Only new
+EventSub notifications received while connected are processed. Twitch does not
+replay every event missed during disconnects; do not treat chat thank-you messages
+as an accounting record. Existing Twitch Shared Chat behavior applies: user-token
+chat messages/announcements may also appear in the shared session's other channels.
+
+### Live verification
+
+1. Approve the broadcaster bundle and enable events in a single test server.
+2. Check `twitchevents status` for active types; preview each template in Discord.
+3. Test a genuine new follow and an incoming raid. Confirm one appropriate reply
+   appears in the correct Twitch channel.
+4. Test subscriptions, resubs, gifts and cheers as those events occur naturally;
+   do not spend money solely to test. Local tests cover their simulated payloads.
+5. Disable a type and confirm it stays silent. Switch chat/announcement modes and
+   check the next real event. Reload and verify enabled settings are preserved.
+6. Set up a second broadcaster with different messages; verify routing stays
+   separate and pausing one does not stop the other's listener or chat commands.
+
+Twitch reference: https://dev.twitch.tv/docs/eventsub/reference/channel
+
+
+## Stream tools update: timers, to-dos, counters, ads, triggers and attendance
+
+Push the complete `twitchbridge` folder, then run `[p]cog update twitchbridge`
+and `[p]reload twitchbridge`. For ad controls, approve the broadcaster again with
+`[p]twitchset authorize`: `channel:read:ads`, `channel:manage:ads` and
+`channel:edit:commercial` are newly included in the broadcaster bundle. Bot
+permissions are unchanged. Other new tools use existing permissions.
+
+All features are configured in the broadcaster's linked Discord server. Setup
+requires bot-owner access unless described otherwise. Timers/triggers opt in when
+added; ad warnings, streak tracking and first-message greetings start disabled.
+Queues/status reset on reload; saved lists, counters, attendance and settings persist.
+Existing crate data is not used or modified.
+
+### Shared response variables
+
+Custom command responses, timer text, chat-trigger text and first-message greetings
+all support:
+
+| Variable | Value |
+| --- | --- |
+| `{user}` | Invoking viewer/member display name; empty for timer messages |
+| `{args}` | Command arguments, or the original triggering/greeting chat text |
+| `{channel}` | Linked broadcaster username |
+| `{url}` | Actor's Twitch URL when a Twitch login is available; empty otherwise |
+| `{counter}` | Increment the counter named after this command/timer/trigger |
+| `{counter:deaths}` | Increment a named counter shared by any response using that name |
+| `{uptime}` | Live uptime as hours/minutes/seconds, or Offline |
+| `{title}` | Stream title, or last configured channel title offline |
+| `{game}` | Game/category, or last configured category offline |
+| `{viewers}` | Twitch's live viewer count; 0 offline |
+| `{live}` | Live or Offline |
+| `{streak}` | Actor's recorded streak; 0 if unavailable/tracking disabled |
+
+Discord custom responses can use verified account links for `{url}` and `{streak}`;
+linking remains optional for normal Discord commands. Stream data is cached for up
+to 30 seconds. Twitch API failures are reported in `[p]twitchset status`, rather
+than replacing live data with invented values.
+
+Counters persist per server, increase once for each distinct referenced counter
+per accepted response, and update under a lock. Repeating `{counter}` twice in one
+response increments it once. Response text is never evaluated as code or recursively
+interpreted. Failed delivery can still consume an increment: counters count accepted
+invocations, not confirmed messages. Cooldown/permission denials do not increment.
+Unknown placeholders remain literal. Custom commands must fit 500 characters after
+expansion; automatic messages normalize whitespace and truncate to 500 characters.
+
+```
+[p]twitchcommand add deaths Death count: {counter:deaths}
+[p]twitchcommand platform deaths both
+[p]twitchcounter view deaths
+[p]twitchcounter reset deaths
+[p]twitchcounter set deaths 25
+[p]twitchcommand add streaminfo {title} | {game} | Live for {uptime} | Viewers: {viewers}
+```
+
+Counter names use 1-32 letters/numbers/underscores. There are at most 1000 counters
+per server. `set` accepts 0-1000000000. Setup commands do not themselves increment.
+
+### Timed Twitch messages
+
+```
+[p]twitchtimer add socials 600 Follow our socials! Current game: {game}
+[p]twitchtimer enabled socials false
+[p]twitchtimer liveonly socials false
+[p]twitchtimer list
+[p]twitchtimer remove socials
+```
+
+`add <name> <seconds> <message>` also replaces an existing timer. Intervals are
+10-86400 seconds; up to 50 timers are allowed. Adding a timer enables it, with
+live-only posting by default. `liveonly false` allows offline chat posting.
+The first message waits a full interval. Reload, new live sessions or automation
+configuration changes restart interval timing. Missed intervals are not replayed.
+Live/offline transitions are polled and can take about 30 seconds to be observed.
+
+### Shared Twitch/Discord to-do list
+
+In Twitch:
+
+```
+!todo add Finish the next quest
+!todo view
+!todo del 1
+```
+
+In Discord, use the same normal prefix with `.todo ...` when there is no registered
+Discord command called todo, or use these unambiguous commands:
+
+```
+[p]twitchtodo add Finish the next quest
+[p]twitchtodo view
+[p]twitchtodo del 1
+[p]twitchtodo permission everyone
+```
+
+One list is shared by the server and its linked Twitch channel. Viewing is open;
+editing defaults to Twitch moderators/broadcaster and Discord Red moderators,
+Manage Server, server owner or bot owner. The bot owner can change editing access
+to `everyone`, `moderator`, or `broadcaster` with the permission command. In Discord,
+`broadcaster` maps to server owner/bot owner, not an unverified Twitch username.
+Lists hold 100 items of up to 250 characters each. Deletion uses the current
+one-based number and renumbers remaining items. Run view again before deleting
+if someone else has edited the list. Long Twitch lists require multiple replies
+and obey Twitch's message rate limit; Discord output is grouped into messages.
+Avoid conflicting Tags/Alias commands named todo. Canonical `twitchtodo` is always
+available regardless of an existing unrelated todo command.
+
+### Ad warnings, snooze and manual commercial breaks
+
+```
+[p]twitchads leads 300 60 10 1
+[p]twitchads message Ads start in {ad_seconds} seconds for about {ad_duration} seconds.
+[p]twitchads mode chat
+[p]twitchads enabled true
+[p]twitchads status
+[p]twitchads snooze
+[p]twitchads run 60
+```
+
+Lead times are configurable from 300 seconds down to 1 second. You may select one
+or several times. Default lead time is 300 seconds. Mode may be `chat` or
+`announcement`; banner mode uses the existing announcement color/permissions.
+`{ad_seconds}` is remaining time; `{ad_duration}` is Twitch's scheduled break
+length. The shared response variables above also work in ad warning templates.
+
+Twitch `!ads status` shows the next ad and available snoozes. Only the actual
+broadcaster can run `!ads snooze` or `!ads run 60` from Twitch chat; moderators cannot
+force these actions. Discord mutations require bot-owner access. Commercial
+lengths supported by the command are 30, 60, 90, 120, 150 and 180 seconds.
+
+Snooze calls Twitch's real five-minute snooze endpoint, consumes an available
+snooze, suppresses further warnings for five minutes and then re-arms against the
+new Twitch schedule. If Twitch has no snoozes left, the operation fails explicitly.
+The pause time persists through reload. Manual commercials require an eligible
+live partner/affiliate channel and respect Twitch's returned cooldown. Starting
+an ad refreshes Twitch's actual next-ad timestamp; this API does not let Paimon
+arbitrarily reset Twitch's Ads Manager schedule to a chosen interval. Only Twitch
+controls that schedule, and the command reports the resulting next ad.
+
+Schedules are refreshed approximately every 15 seconds and again before a warning
+is sent. A lightweight local scheduler checks deadlines four times per second.
+Warnings are prioritized ahead of queued automatic messages, but still share
+Twitch's global send limiter. A one-second lead is **best effort**, not a precise
+delivery guarantee: network delays, queue contention or Twitch limits may make it
+late, in which case it is dropped instead of announcing an ad that already started.
+When starting late, one timely threshold is sent instead of replaying all missed
+warnings. Sent/attempted warning thresholds are persisted to avoid repeats after
+reload. Ad mutations are never automatically retried after an ambiguous failure.
+No live ads were run during development; all ad tests use simulated API responses.
+
+Twitch's API contract: https://dev.twitch.tv/docs/api/reference/ads
+
+### Word/phrase chat triggers
+
+```
+[p]twitchtrigger add hello hello Hello {user}! Welcome to {channel}.
+[p]twitchtrigger add gg "good game" GG {user}! Current game: {game}
+[p]twitchtrigger cooldown hello 30
+[p]twitchtrigger enabled hello false
+[p]twitchtrigger list
+[p]twitchtrigger remove hello
+```
+
+Matching is case-insensitive with word boundaries, so `hi` will not match inside
+`this`. Quote multi-word phrases. Up to 50 triggers are allowed. New triggers
+start enabled with a server-wide 30-second cooldown. Command-prefixed chat is
+excluded from word triggers. Paimon's own messages and Shared Chat messages from
+other channels do not trigger them. `{args}` contains the matched chat message.
+
+### Stream streaks
+
+```
+[p]twitchstreak enabled true
+[p]twitchstreak breakonmiss true
+[p]twitchstreak set luna 20
+[p]twitchstreak add luna 5
+[p]twitchstreak view luna
+[p]twitchstreak forget luna
+```
+
+Viewers can use `!streak` in Twitch to see their own value. Tracking counts the
+first message from a viewer in each observed live stream, identified by Twitch's
+permanent stream ID. Extra messages in the same stream never increment it.
+With `breakonmiss true` (default), missing an observed stream resets the count to
+1 when they next speak; false retains the count and adds one per attended stream.
+Migration set/add numbers include the currently observed live stream, preventing
+an immediate extra increment from that stream's next chat message.
+
+Attendance is stored by permanent Twitch user ID and broadcaster, independently
+of Discord linking or username changes. Paimon cannot detect silent attendance,
+reconstruct chat during downtime, or know every stream it missed while stopped.
+Only streams observed while tracking/greetings are active can affect a missed
+stream calculation. Very short streams may fall between polling intervals.
+Owner-only forget removes streak and greeting history plus per-user greeting text
+for that Twitch account. Verified linked user data is also removed by Red's data
+deletion hook. Unlinked viewers can ask the bot owner to forget their Twitch ID.
+
+### First-message greetings and automatic follow messages
+
+```
+[p]twitchfirst message Welcome {user}! We are playing {game}.
+[p]twitchfirst mode ever
+[p]twitchfirst mode stream
+[p]twitchfirst enabled true
+[p]twitchfirst everyone false
+[p]twitchfirst user luna Go follow {user} at {url}!
+[p]twitchfirst removeuser luna
+```
+
+`ever` (default) greets a viewer once after this feature begins observing them.
+`stream` greets on their first message each live stream. It does not fire merely
+because someone appears in the viewer list. Default greetings apply to everyone
+unless `everyone false` is set; per-user templates still apply when false. This
+supports automatic shoutout-style follow messages for selected viewers. It posts
+the configured text, not Twitch's native shoutout card.
+
+Greeting eligibility is saved before queueing to prevent duplicate greetings on
+reconnect. A rejected/overflowed send is not retried on every subsequent message.
+All automatic traffic uses bounded queues and the existing send limiter. Messages
+older than 60 seconds, stopped streams, changed configurations and changed target
+broadcasters are discarded. Use `[p]twitchset status` for the last automation result
+and queued/dropped counts.
+
+### Suggested live checks
+
+1. Verify existing logging, commands, linking panels and roles still work.
+2. Add a live-only timer; confirm it waits its interval and stops posting offline.
+3. Add/view/delete to-dos across Twitch and Discord, checking edit permissions.
+4. Run a counter command, reset/set it, and verify the value survives reload.
+5. Compare stream variables with Twitch while live and offline.
+6. Test whole-word triggers and cooldowns, then greeting ever/stream modes with
+   separate accounts and a per-user follow message.
+7. Check streaks across two observed streams, a missed stream, and migrated totals.
+8. Approve ad permissions, read the schedule, and observe warning timing. Test a
+   snooze or a manual commercial only when the broadcaster intends to run ads.
+
+
+## Moderator stream metadata controls
+
+Update/reload the cog, then approve the broadcaster once with
+`[p]twitchset authorize` to add `channel:manage:broadcast`. Bot authorization is
+unchanged. Twitch requires the linked broadcaster's token for channel edits;
+Paimon checks the invoking moderator before using that permission.
+
+Twitch moderators and the broadcaster can change:
+
+```
+!title A new adventure begins!
+!game Minecraft
+!category Just Chatting
+!tags English Cozy Community
+!tags clear
+!language en
+```
+
+With no arguments, `!title`, `!game`, `!category`, `!tags`, and `!language` show the
+current value; regular viewers may use these read-only forms. Game and category
+are aliases for the same Twitch field. Mutations require the real Twitch
+moderator badge or broadcaster ID. Ordinary viewers cannot change any field.
+
+In Discord, Red moderators, members with Manage Server, server owners and bot
+owners can use:
+
+```
+[p]twitchstream title A new adventure begins!
+[p]twitchstream game Minecraft
+[p]twitchstream category Just Chatting
+[p]twitchstream tags English Cozy Community
+[p]twitchstream tags clear
+[p]twitchstream language en
+```
+
+Omit a value to read it. Discord uses its own moderator permissions; members do
+not need to link their Twitch account just to use these Discord commands.
+The command always targets that Discord server's configured broadcaster. No
+command accepts an arbitrary broadcaster as an update target.
+
+Titles must contain 1-140 characters. Category lookup accepts a name or numeric
+Twitch category ID, prefers an exact name match and rejects ambiguous searches
+with suggestions. If several match, repeat using the full name or listed ID.
+Numeric IDs are validated before updating because Twitch can ignore unknown IDs.
+Tags replace the entire tag list: at most 10 unique alphanumeric tags, each up to
+25 characters; comma/space separation is supported and `clear` removes all tags.
+Language accepts a two-letter code such as en, or other; Twitch validates whether
+that language is supported. Only the requested field is patched, preserving all
+other channel settings, content labels and stream properties.
+
+Successful updates invalidate the stream-information cache so `{title}` and
+`{game}` can refresh promptly. Failed updates do not claim success and are not
+automatically retried. Metadata can also be configured while offline, provided
+the integration is enabled. Twitch mutation trigger names `title`, `game`,
+`category`, `tags`, and `language` are now reserved built-ins; remove older custom
+commands with those names if necessary.
+
+Live checks: try reads as a viewer; verify writes fail for a viewer and succeed
+for a moderator; test a full category name and an ambiguous one; confirm another
+linked broadcaster is unaffected; then check stream variables after updating.
+No live channel settings were changed during development.
+
+Twitch references:
+https://dev.twitch.tv/docs/api/reference/channels#modify-channel-information
+https://dev.twitch.tv/docs/api/reference/search#search-categories

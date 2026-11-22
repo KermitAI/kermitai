@@ -6,4 +6,6 @@ BOT_SCOPES = frozenset({
 BROADCASTER_SCOPES = frozenset({
     "user:read:chat", "moderation:read", "channel:read:subscriptions", "channel:read:vips",
     "channel:bot", "channel:read:redemptions", "channel:manage:redemptions",
+    "bits:read", "moderator:read:followers",
+    "channel:read:ads", "channel:manage:ads", "channel:edit:commercial", "channel:manage:broadcast",
 })

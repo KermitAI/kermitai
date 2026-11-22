@@ -1,6 +1,7 @@
 """Owner-managed Twitch chat, shared commands and announcements."""
 import asyncio
 import contextlib
+import copy
 import time
 from collections import OrderedDict
 
@@ -13,6 +14,10 @@ from .policy import (RecentMessages, log_line, login_name, reconnect_url, comman
 from .errors import BridgeError
 from .community import CommunityMixin, ROLE_SCOPES, DEFAULT_SHOUTOUT
 from .scopes import BOT_SCOPES, BROADCASTER_SCOPES
+from .events import ChannelEventsMixin, EVENT_DEFAULTS
+from .stream_tools import StreamToolsMixin, FIRST_DEFAULTS, STREAK_DEFAULTS
+from .ads import AD_DEFAULTS
+from .channel_edit import ChannelEditMixin, CHANNEL_COMMANDS
 
 BASE = "https://api.twitch.tv/helix/"
 AUTH = "https://id.twitch.tv/oauth2/"
@@ -20,7 +25,7 @@ SOCKET = "wss://eventsub.wss.twitch.tv/ws"
 SCOPES = " ".join(sorted(BOT_SCOPES))
 
 
-class TwitchBridge(CommunityMixin, commands.Cog):
+class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, CommunityMixin, commands.Cog):
     """Connect Twitch broadcasters to Discord servers (bot owner only)."""
 
     def __init__(self, bot):
@@ -33,7 +38,12 @@ class TwitchBridge(CommunityMixin, commands.Cog):
                                    member_links={}, role_mappings={}, role_auth={}, roles_enabled=False,
                                    managed_roles={}, shoutout_message=DEFAULT_SHOUTOUT, shoutout_cooldown=60,
                                    link_panel={}, link_panel_label="Link Twitch account",
-                                   link_panel_text="Link your Twitch account to receive your server roles.")
+                                   link_panel_text="Link your Twitch account to receive your server roles.",
+                                   channel_events=copy.deepcopy(EVENT_DEFAULTS), automation_revision=0,
+                                   timers={}, chat_triggers={}, response_counters={}, todo_items=[], todo_permission="moderator",
+                                   ad_settings=copy.deepcopy(AD_DEFAULTS), ad_notices={}, ad_warning_pause_until=0,
+                                   first_message=copy.deepcopy(FIRST_DEFAULTS), streak_settings=copy.deepcopy(STREAK_DEFAULTS),
+                                   stream_session={}, viewer_data={})
         self.http = None
         self.runner = None
         self.sender = None
@@ -66,6 +76,8 @@ class TwitchBridge(CommunityMixin, commands.Cog):
         self.pending_device_links = {}
         self.link_generation = {}
         self.role_wakeup = asyncio.Event()
+        self._init_channel_events()
+        self._init_stream_tools()
 
     async def cog_load(self):
         self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
@@ -74,6 +86,12 @@ class TwitchBridge(CommunityMixin, commands.Cog):
         self.command_worker = asyncio.create_task(self._command_loop())
         self.runner = asyncio.create_task(self._run())
         self.role_worker = asyncio.create_task(self._role_loop())
+        self.event_sender = asyncio.create_task(self._event_sender_loop())
+        self.event_supervisor = asyncio.create_task(self._event_supervisor_loop())
+        self.tool_sender = asyncio.create_task(self._tool_send_loop())
+        self.tool_chat_worker = asyncio.create_task(self._tool_chat_loop())
+        self.tool_monitor = asyncio.create_task(self._tool_monitor_loop())
+        self.tool_ticker = asyncio.create_task(self._tool_tick_loop())
 
     async def cog_unload(self):
         self.closing = True
@@ -81,7 +99,8 @@ class TwitchBridge(CommunityMixin, commands.Cog):
             view.stop()
         for modal in list(self.link_modals):
             modal.stop()
-        tasks = [self.runner, self.sender, self.command_worker, self.role_worker, *self.auth_tasks.values(), *self.member_auth_tasks.values()]
+        tasks = [self.runner, self.sender, self.command_worker, self.role_worker, self.event_sender, self.event_supervisor, self.tool_sender, self.tool_chat_worker, self.tool_monitor, self.tool_ticker,
+                 *self.event_tasks.values(), *self.auth_tasks.values(), *self.member_auth_tasks.values()]
         for task in tasks:
             if task:
                 task.cancel()
@@ -91,6 +110,10 @@ class TwitchBridge(CommunityMixin, commands.Cog):
 
     async def red_delete_data_for_user(self, *, requester, user_id):
         for guild_id in await self.config.all_guilds():
+            cfg = await self.config.guild_from_id(guild_id).all()
+            link = cfg.get("member_links", {}).get(str(user_id))
+            if link and (cfg.get("viewer_data") or cfg.get("first_message", {}).get("users")):
+                await self._forget_tool_viewer(guild_id, link["twitch_id"])
             await self._unlink_member(guild_id, user_id)
             async with self.settings_lock:
                 group = self.config.guild_from_id(guild_id)
@@ -236,6 +259,8 @@ class TwitchBridge(CommunityMixin, commands.Cog):
                         # and the deferred redemption integration.
                         await group.role_auth.set(auth)
             await self._restart()
+            if getattr(self, "events_wakeup", None) is not None:
+                self.events_wakeup.set()
             await user.send(f"Twitch account `{identity['login']}` verified. Run `twitchset status` in the server.")
         except (BridgeError, discord.HTTPException) as exc:
             with contextlib.suppress(discord.HTTPException):
@@ -348,6 +373,11 @@ class TwitchBridge(CommunityMixin, commands.Cog):
                 continue
             if event.get("source_broadcaster_user_id") not in (None, "", cfg["broadcaster_id"]):
                 continue
+            if getattr(self, "tool_chat_queue", None) is not None and event.get("chatter_user_id") != bot_id:
+                try:
+                    self.tool_chat_queue.put_nowait((int(gid), cfg["broadcaster_id"], event))
+                except asyncio.QueueFull:
+                    self.tool_dropped += 1
             parsed = parse_command(event.get("message", {}).get("text", ""), cfg.get("command_prefix", "!"))
             if parsed:
                 try:
@@ -398,11 +428,16 @@ class TwitchBridge(CommunityMixin, commands.Cog):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             group = self.config.guild(ctx.guild)
+            await self._invalidate_events_locked(group)
+            await self._invalidate_tools_locked(group)
             await self._cleanup_roles_locked(ctx.guild, all_roles=True)
             await group.roles_enabled.set(False)
             await group.role_auth.set({})
             self.pending_links = {k: v for k, v in self.pending_links.items() if k[0] != ctx.guild.id}
             await group.broadcaster.set(broadcaster)
+            await group.ad_warning_pause_until.set(0)
+            self.ad_cache.pop(ctx.guild.id, None)
+            self.ad_pause_until.pop(ctx.guild.id, None)
             await group.broadcaster_id.set("")
             await group.broadcaster_auth.set({})
             await group.enabled.set(False)
@@ -462,6 +497,8 @@ class TwitchBridge(CommunityMixin, commands.Cog):
             await ctx.send("Authorize the broadcaster first.")
             return
         async with self.settings_lock:
+            await self._invalidate_events_locked(self.config.guild(ctx.guild))
+            await self._invalidate_tools_locked(self.config.guild(ctx.guild))
             await self.config.guild(ctx.guild).enabled.set(enabled)
         await self._restart()
         await ctx.send("Twitch integration enabled." if enabled else "Twitch integration paused.")
@@ -476,6 +513,8 @@ class TwitchBridge(CommunityMixin, commands.Cog):
         async with self.settings_lock:
             await self._cleanup_roles_locked(ctx.guild, all_roles=True)
             group = self.config.guild(ctx.guild)
+            await self._invalidate_events_locked(group)
+            await self._invalidate_tools_locked(group)
             await group.roles_enabled.set(False)
             await group.role_auth.set({})
             self.pending_links = {k: v for k, v in self.pending_links.items() if k[0] != ctx.guild.id}
@@ -512,7 +551,8 @@ class TwitchBridge(CommunityMixin, commands.Cog):
             f"Queued logs: {self.queue.qsize()} | Dropped logs: {self.dropped}\n"
             f"Commands: {self.command_status} | Queue: {self.command_queue.qsize()} | Dropped: {self.command_dropped}\n"
             f"Chat writing authorized: {'user:write:chat' in auth.get('scopes', [])}\n"
-            f"Announcements authorized: {'moderator:manage:announcements' in auth.get('scopes', [])}",
+            f"Announcements authorized: {'moderator:manage:announcements' in auth.get('scopes', [])}\n"
+            f"Stream tools: {self.tool_status.get(ctx.guild.id, 'No recent automation')} | Queued: {self.tool_queue.qsize()} | Dropped: {self.tool_dropped}",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -520,7 +560,7 @@ class TwitchBridge(CommunityMixin, commands.Cog):
     def _command_lock(self, guild_id):
         return self.command_locks.setdefault(guild_id, asyncio.Lock())
 
-    async def _prepare_command(self, guild_id, name, args, platform, level, user, broadcaster_id=None):
+    async def _prepare_command(self, guild_id, name, args, platform, level, user, broadcaster_id=None, twitch_id=None, twitch_login=None):
         async with self._command_lock(guild_id):
             cfg = await self.config.guild_from_id(guild_id).all()
             if not cfg["enabled"] or (broadcaster_id is not None and cfg["broadcaster_id"] != broadcaster_id):
@@ -532,7 +572,7 @@ class TwitchBridge(CommunityMixin, commands.Cog):
             now = time.monotonic()
             if now < self.cooldowns.get(key, 0):
                 return None
-            text = render_response(record["response"], user=user, args=args, channel=cfg["broadcaster"])
+            text = await self._render_shared(guild_id, record["response"], user=user, args=args, source=name, twitch_id=twitch_id, login=twitch_login)
             self.cooldowns[key] = now + record.get("cooldown", 5)
             # Discard only expired entries; active cooldowns must not be evicted.
             for old in list(self.cooldowns):
@@ -540,7 +580,7 @@ class TwitchBridge(CommunityMixin, commands.Cog):
                     self.cooldowns.pop(old, None)
             return text
 
-    async def _send_twitch(self, guild_id, text, expected_broadcaster=None, *, announcement=False):
+    async def _send_twitch(self, guild_id, text, expected_broadcaster=None, *, announcement=False, event_guard=None, automation_guard=None):
         text = chat_text(text)
         # Stay below the normal 20 messages/30 sec chat limit across all channels.
         async with self.send_lock:
@@ -550,7 +590,24 @@ class TwitchBridge(CommunityMixin, commands.Cog):
                 raise BridgeError("The Twitch connection is paused or not configured.")
             if expected_broadcaster is not None and cfg["broadcaster_id"] != expected_broadcaster:
                 raise BridgeError("The broadcaster changed before this message could be sent.")
+            if event_guard is not None:
+                if not self._event_delivery_allowed(cfg, *event_guard):
+                    raise BridgeError("This queued event was paused, reconfigured, or expired before delivery.")
+                guild = self.bot.get_guild(guild_id)
+                if guild is None or await self.bot.cog_disabled_in_guild(self, guild):
+                    raise BridgeError("Channel events are disabled in this Discord server.")
+            if automation_guard is not None and not self._tool_guard_allowed(cfg, automation_guard):
+                raise BridgeError("This queued automation was paused, changed or expired.")
             client_id, auth = await self._token()
+            if automation_guard is not None:
+                cfg = await self.config.guild_from_id(guild_id).all()
+                if not self._tool_guard_allowed(cfg, automation_guard):
+                    raise BridgeError("This automation changed before delivery.")
+            if event_guard is not None:
+                # Token refresh can yield while an owner reconfigures this channel.
+                cfg = await self.config.guild_from_id(guild_id).all()
+                if cfg["broadcaster_id"] != expected_broadcaster or not self._event_delivery_allowed(cfg, *event_guard):
+                    raise BridgeError("This event's settings changed before it could be sent.")
             if cfg["broadcaster_auth"].get("client_id") != client_id:
                 raise BridgeError("Authorize the broadcaster for this application first.")
             if announcement:
@@ -599,8 +656,23 @@ class TwitchBridge(CommunityMixin, commands.Cog):
                         if cfg["broadcaster_id"] == broadcaster_id and cfg["enabled"]:
                             await self._shoutout(guild_id, parsed[1].strip(), expected_broadcaster=broadcaster_id)
                     continue
+                if parsed[0] in CHANNEL_COMMANDS:
+                    try:
+                        text = await self._channel_action(guild_id, parsed[0], parsed[1], twitch_level(event), expected=broadcaster_id)
+                    except (BridgeError, ValueError) as exc:
+                        text = str(exc)
+                    await self._send_twitch(guild_id, text[:500], expected_broadcaster=broadcaster_id)
+                    continue
+                if parsed[0] in ("todo", "ads", "streak"):
+                    try:
+                        await self._tool_twitch_command(guild_id, broadcaster_id, event, *parsed)
+                    except (BridgeError, ValueError) as exc:
+                        self.command_status = str(exc)
+                        await self._send_twitch(guild_id, str(exc), expected_broadcaster=broadcaster_id)
+                    continue
+                await self._record_presence(guild_id, broadcaster_id, event)
                 text = await self._prepare_command(guild_id, *parsed, "twitch", twitch_level(event),
-                                                   event.get("chatter_user_name", "viewer"), broadcaster_id)
+                                                   event.get("chatter_user_name", "viewer"), broadcaster_id, event.get("chatter_user_id"), event.get("chatter_user_login"))
                 if text:
                     await self._send_twitch(guild_id, text, expected_broadcaster=broadcaster_id)
             except (BridgeError, ValueError) as exc:
@@ -624,16 +696,23 @@ class TwitchBridge(CommunityMixin, commands.Cog):
         parsed = parse_command(message.content, prefix)
         if not parsed:
             return
+        if parsed[0] == "todo":
+            parts = parsed[1].split(maxsplit=1)
+            await self._todo_reply(ctx, parts[0].lower() if parts else "view", parts[1] if len(parts) > 1 else "")
+            return
         owner = await self.bot.is_owner(message.author)
         level = 2 if owner or message.author.id == message.guild.owner_id else 0
         if level == 0 and (message.author.guild_permissions.manage_guild or await self.bot.is_mod(message.author)):
             level = 1
         try:
-            text = await self._prepare_command(message.guild.id, *parsed, "discord", level, message.author.display_name)
+            cfg = await self.config.guild(message.guild).all()
+            linked = cfg.get("member_links", {}).get(str(message.author.id), {})
+            text = await self._prepare_command(message.guild.id, *parsed, "discord", level, message.author.display_name,
+                                               twitch_id=linked.get("twitch_id"), twitch_login=linked.get("login"))
             if text:
                 await message.channel.send(text, allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
-        except (ValueError, discord.HTTPException) as exc:
-            self.command_status = str(exc) if isinstance(exc, ValueError) else "Discord command reply failed"
+        except (BridgeError, ValueError, discord.HTTPException) as exc:
+            self.command_status = str(exc) if isinstance(exc, (BridgeError, ValueError)) else "Discord command reply failed"
 
     @commands.is_owner()
     @commands.guild_only()
