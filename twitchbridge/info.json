@@ -7,7 +7,8 @@
   "description": "Custom Twitch/Discord bridge with timers, shared to-dos, counters, stream variables, ad controls, word triggers, greetings, attendance streaks, channel events, roles and verified account linking. Includes moderator controls for stream title, category/game, tags and language.",
   "min_bot_version": "3.5.0",
   "requirements": [
-    "aiohttp>=3.9.0,<4"
+    "aiohttp>=3.9.0,<4",
+    "tzdata>=2024.1"
   ],
   "tags": [
     "twitch",

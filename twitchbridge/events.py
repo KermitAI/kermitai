@@ -10,6 +10,7 @@ import discord
 from redbot.core import commands
 
 from .errors import BridgeError
+from .variables import mask_extended
 from .policy import RecentMessages, reconnect_url
 
 API = "https://api.twitch.tv/helix/"
@@ -55,19 +56,20 @@ def event_kind(value):
 
 
 def validate_event_template(kind, template):
-    if not template.strip() or len(template) > 500:
-        raise ValueError("Use a message template of 1-500 characters.")
+    if not template.strip() or len(template) > 4000:
+        raise ValueError("Use a message template of 1-4000 characters.")
     try:
-        fields = string.Formatter().parse(template)
+        masked, extended_fields = mask_extended(template)
+        fields = string.Formatter().parse(masked)
         for literal, field, spec, conversion in fields:
-            if field is not None and (field not in FIELDS[kind] or spec or conversion):
+            if field is not None and (field not in FIELDS[kind] | set(extended_fields) or spec or conversion):
                 raise ValueError("Unsupported placeholder. Available: " + ", ".join(sorted(FIELDS[kind])))
     except (ValueError, KeyError):
         raise ValueError("Use plain text and these placeholders: " + ", ".join("{" + f + "}" for f in sorted(FIELDS[kind]))) from None
     return template.strip()
 
 
-def render_event(kind, template, event, channel, game="Unknown game", usergame="Unknown game"):
+def render_event(kind, template, event, channel, game="Unknown game", usergame="Unknown game", extended=None):
     anonymous = bool(event.get("is_anonymous"))
     raid = kind == "raid"
     prefix = "from_broadcaster_" if raid else ""
@@ -82,9 +84,11 @@ def render_event(kind, template, event, channel, game="Unknown game", usergame="
               "tier": {"1000": "1", "2000": "2", "3000": "3", "Prime": "Prime"}.get(event.get("tier"), "1"),
               "months": event.get("cumulative_months", 0), "count": event.get("total", 1),
               "bits": event.get("bits", 0), "viewers": event.get("viewers", 0), "message": message}
+    masked, extended_fields = mask_extended(template)
+    values.update({key: (extended or {}).get(raw, raw) for key, raw in extended_fields.items()})
     values = {key: " ".join("".join(c for c in str(value) if ord(c) >= 32 or c.isspace()).split())
               for key, value in values.items()}
-    text = template.format_map(values)
+    text = masked.format_map(values)
     text = " ".join("".join(c for c in text if ord(c) >= 32 or c.isspace()).split())
     return text[:497] + "..." if len(text) > 500 else text
 
@@ -298,7 +302,9 @@ class ChannelEventsMixin:
                 template = settings.get("messages", {}).get(kind, DEFAULT_MESSAGES[kind])
                 game = await self._template_game(guild_id, template)
                 usergame = await self._event_usergame(kind, template, event)
-                text = render_event(kind, template, event, cfg["broadcaster"], game, usergame)
+                uid = None if event.get("is_anonymous") else event.get("from_broadcaster_user_id" if kind == "raid" else "user_id")
+                extended = await self._extra_variables(guild_id, template, twitch_id=uid)
+                text = render_event(kind, template, event, cfg["broadcaster"], game, usergame, extended)
                 if not text:
                     raise ValueError("The event message rendered as empty text.")
                 await self._send_twitch(guild_id, text, expected_broadcaster=broadcaster_id,
@@ -415,7 +421,12 @@ class ChannelEventsMixin:
                    "message": {"text": "Great stream!"} if kind == "resub" else "Great stream!"}
         template = cfg.get("channel_events", {}).get("messages", {}).get(kind, DEFAULT_MESSAGES[kind])
         game = await self._template_game(ctx.guild.id, template)
-        text = render_event(kind, template, example, cfg["broadcaster"] or "your channel", game, "Example game")
+        try:
+            extended = await self._extra_variables(ctx.guild.id, template)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        text = render_event(kind, template, example, cfg["broadcaster"] or "your channel", game, "Example game", extended)
         await ctx.send(f"Preview ({kind}): {text}", allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
 
     @twitchevents.command(name="status")

@@ -10,7 +10,7 @@ import discord
 from redbot.core import Config, commands
 
 from .policy import (RecentMessages, log_line, login_name, reconnect_url, command_name,
-                     chat_text, render_response, parse_command, twitch_level, command_allowed, resolve_custom_command)
+                     chat_text, template_text, render_response, parse_command, twitch_level, command_allowed, resolve_custom_command)
 from .errors import BridgeError
 from .community import CommunityMixin, ROLE_SCOPES, DEFAULT_SHOUTOUT
 from .scopes import BOT_SCOPES, BROADCASTER_SCOPES
@@ -725,7 +725,7 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
     async def command_add(self, ctx, name: str, *, response: str):
         """Add a Twitch command; default permission everyone, cooldown 5 seconds."""
         try:
-            name, response = command_name(name), chat_text(response)
+            name, response = command_name(name), template_text(response)
         except ValueError as exc:
             await ctx.send(str(exc))
             return
@@ -762,7 +762,7 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
     async def command_edit(self, ctx, name: str, *, response: str):
         """Replace a command's response."""
         try:
-            response = chat_text(response)
+            response = template_text(response)
         except ValueError as exc:
             await ctx.send(str(exc))
             return
@@ -975,7 +975,7 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
     async def shoutout_message(self, ctx, *, message: str):
         """Set follow-message text with {user}, {url}, and optionally {channel}."""
         try:
-            message = chat_text(message)
+            message = template_text(message)
             if "{url}" not in message:
                 raise ValueError("Include {url} so the shoutout contains the Twitch link.")
         except ValueError as exc:

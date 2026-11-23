@@ -3,6 +3,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 import re
+from .variables import DYNAMIC, mask_extended
 
 
 def login_name(value):
@@ -68,6 +69,14 @@ def chat_text(value):
     return value
 
 
+def template_text(value):
+    value = " ".join(value.split())
+    if not value or len(value) > 4000 or any(ord(c) < 32 for c in value):
+        raise ValueError("Message templates must contain 1-4000 characters.")
+    mask_extended(value)
+    return value
+
+
 def render_response(template, *, user, args, channel):
     # One pass: user-supplied arguments cannot introduce additional substitutions.
     values = {"user": user, "args": args, "channel": channel}
@@ -108,9 +117,10 @@ def twitch_target(value):
     return login_name(value.lstrip("@"))
 
 
-def shoutout_text(template, identity, channel, game="Unknown game"):
+def shoutout_text(template, identity, channel, game="Unknown game", extended=None):
     values = {"user": identity["display_name"], "url": "https://twitch.tv/" + identity["login"], "channel": channel, "game": game}
-    return chat_text(re.sub(r"\{(user|url|channel|game)\}", lambda m: values[m[1]], template))
+    pattern = re.compile(DYNAMIC.pattern + r"|\{(?:user|url|channel|game)\}")
+    return chat_text(pattern.sub(lambda m: (extended or {}).get(m[0], values.get(m[0][1:-1], m[0])), template))
 
 
 def resolve_custom_command(records, name):

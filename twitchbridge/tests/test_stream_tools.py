@@ -97,6 +97,14 @@ class StreamToolsTests(unittest.IsolatedAsyncioTestCase):
             await self.cog._render_shared(1, "{counter:deaths}")
         self.assertEqual(before, self.cfg["response_counters"])
 
+    async def test_target_formats_bare_and_tagged_first_argument_and_preserves_args(self):
+        for args, expected in [("Some_User", "@Some_User"), ("@Some_User", "@Some_User"),
+                               ("Some_User extra text", "@Some_User"), ("", ""),
+                               ("@@user", ""), ("https://twitch.tv/user", ""), ("<@123>", "")]:
+            with self.subTest(args=args):
+                text = await self.cog._render_shared(1, "Target: {target} | Args: {args}", args=args)
+                self.assertEqual(text, " ".join(f"Target: {expected} | Args: {args}".split()))
+
     async def test_failed_render_does_not_increment_counter(self):
         with self.assertRaises(ValueError):
             await self.cog._render_shared(1, "{counter}" + "x" * 501, source="deaths")

@@ -544,7 +544,7 @@ All commands below require bot-owner access:
   feature is off by default. `enabled true` opts in to all currently selected types.
 - `event <type> true/false` selects individual event types.
 - `message <type> <text>` saves a template; unknown placeholders, formatting
-  expressions, and templates over 500 characters are rejected. Expanded messages
+  expressions, and templates over 4000 characters are rejected. Expanded messages
   are normalized to a single line and truncated to 500 characters when necessary.
 - `preview <type>` sends an example to the invoking Discord channel only. It never
   fabricates a live Twitch event or sends a message to Twitch.
@@ -997,3 +997,98 @@ Discord previews use `Example game` for this placeholder.
 .twitchevents message raid Welcome {user} and your {viewers} raiders! They last played {usergame}! Follow them: {url}
 .twitchevents preview raid
 ```
+
+### Extended response variables
+
+These work in custom commands (Discord and Twitch), word triggers, timers,
+first-message greetings and overrides, ad warning templates, shoutout templates,
+and every channel-event type and its preview. Simple one-shot announcements
+remain literal text. Templates may contain up to 4000 characters; final chat
+messages still have the existing 500-character limit. There is no separate limit
+on the number of choices in a list within the template size. Keep each possible
+rendered reply within 500 characters. Use straight double quotes around responses.
+Expressions cannot be nested: selected replies and fetched content are literal
+text, never executed or interpreted as additional variables. Put common fields
+outside the expression, e.g. `{user}: {choose "Yes!" "No!"}`. Repeating the exact
+same expression in a message reuses its first result (one roll/lookup).
+
+| Variable | Example | Result |
+| --- | --- | --- |
+| Countdown | `{countdown 2026-12-25 00:00:00 America/Toronto}` | Full months, weeks, days, hours remaining |
+| Alternative date format | `{countdown dec 25 2026 12:00:00 AM EST}` | Same duration format; EST is fixed UTC-5 |
+| Random integer | `{random 1 100}` | Inclusive random integer from 1 through 100 |
+| Weighted random response | `{randomreply 10 "Response A" 80 "Response B" 100 "Response C"}` | A for rolls 1-10, B for 11-80, C for 81-100 |
+| Equal random response | `{choose "Response A" "Response B" "Response C"}` | Each choice is equally likely |
+| Fetch a text response | `{urlfetch https://example.com/facts}` | Plain-text or JSON response, normalized to one line |
+| Follow duration | `{followage}` | Chat user's months, weeks, days and hours following the linked broadcaster |
+| Local time | `{time Europe/Helsinki}` | Current date and 24-hour time with timezone abbreviation |
+| Weather | `{weather Helsinki/Finland}` | Current model conditions and temperature in Celsius, attributed to Open-Meteo |
+
+Weighted thresholds are positive, strictly increasing cumulative upper bounds.
+The last threshold sets the roll maximum; 10/80/100 gives 10%, 70%, 20% odds.
+Add more threshold/response pairs or more quoted choices as needed. Repeated uses
+may choose the same answer; this does not rotate through or exhaust the list.
+
+Countdowns use full calendar months (month-end dates are clamped), then weeks,
+days and whole hours. Past dates return zero for every unit. The example date in
+2025 is already past. Use IANA location zones for automatic daylight-saving rules;
+EST/EDT and other supported US abbreviations have fixed offsets. Nonexistent local
+times during spring DST changes are rejected; ambiguous autumn times use the
+first occurrence. The `tzdata` dependency supplies location zones on Windows.
+
+`{followage}` uses the authenticated Twitch chatter identity. For Discord custom
+commands, link the member's Twitch account first. For events it uses the event
+actor (the incoming raider for raids); anonymous events cannot be looked up.
+For shoutouts it uses the target account. It requires the broadcaster's existing
+`moderator:read:followers` permission; no extra scope was added. It reports
+not-following separately from unavailable authorization/API data. Twitch's current
+follow record is used, so unfollowing/re-following resets the reported duration.
+It does not reconstruct historic follows or permanently store follow dates.
+
+URL fetch permits public HTTPS URLs on port 443, including query strings. It
+never forwards Twitch credentials, follows redirects, accesses private/local
+addresses, or evaluates the returned content. DNS addresses are validated at
+connection time. Reads time out after five seconds and stop at 64 KiB; up to
+500 characters of fetched text are used. At most eight distinct extended
+expressions may be used per template. Failures return readable fallback text
+without echoing query tokens or internal errors. A preview performs the same
+external lookups/random rolls as a real message but posts only in Discord.
+
+Weather uses Open-Meteo geocoding and current conditions (a model estimate, not
+a multi-day forecast); successful results cache for five minutes. City/country
+queries such as `Helsinki/Finland` and quoted `New York/United States` are accepted.
+The first geocoding match is used. No key is required for Open-Meteo's free
+non-commercial service. For commercial use, configure a subscribed API key using
+Red's shared tokens (`.set api openmeteo api_key YOUR_KEY`); requests then use the
+customer endpoints. Review Open-Meteo's current service terms for your use case.
+
+Example commands:
+```
+.twitchcommand add christmas Christmas in {countdown 2026-12-25 00:00:00 America/Toronto}!
+.twitchcommand add dice {user} rolled {random 1 100}!
+.twitchcommand add luck {randomreply 10 "Very lucky!" 80 "An ordinary day." 100 "Try again tomorrow!"}
+.twitchcommand add answer {choose "Yes!" "No!" "Maybe!"}
+.twitchcommand add facts {urlfetch https://example.com/facts}
+.twitchcommand add followage {user} — {followage}
+.twitchcommand add helsinki It is {time Europe/Helsinki} in Helsinki.
+.twitchcommand add weather {weather Helsinki/Finland}
+```
+If a command already exists, use `twitchcommand edit` instead of `add`.
+
+References: [Twitch follow information](https://dev.twitch.tv/docs/api/reference/channels),
+[Open-Meteo weather](https://open-meteo.com/en/docs), and
+[Open-Meteo location search](https://open-meteo.com/en/docs/geocoding-api).
+
+### Mentioning a command target
+
+`{args}` preserves the command argument text exactly. Use `{target}` to format the
+first argument as a Twitch-style `@username`, whether the viewer typed `username`
+or `@username`. It adds exactly one `@` and ignores any later arguments. Empty or
+invalid first arguments produce an empty target. This formats a username; it does
+not verify the account exists or create a Discord account mention.
+
+```
+.twitchcommand edit cheer Let's hear it for {target}!
+```
+Both `!cheer username` and `!cheer @username` respond with
+`Let's hear it for @username!`. Do not put another `@` before `{target}`.

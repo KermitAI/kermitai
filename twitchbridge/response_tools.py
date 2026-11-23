@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from .errors import BridgeError
 from .policy import chat_text
+from .variables import DYNAMIC, ExtraVariablesMixin
 
 API = "https://api.twitch.tv/helix/"
 COUNTER = re.compile(r"\{counter(?::([a-z0-9_]{1,32}))?\}")
@@ -20,6 +21,15 @@ def tool_name(value):
     return value
 
 
+def target_mention(args):
+    """Format the first command argument as a Twitch mention without duplicating @."""
+    parts = args.split(maxsplit=1)
+    token = parts[0] if parts else ""
+    if token.startswith("@"):
+        token = token[1:]
+    return "@" + token if re.fullmatch(r"[a-zA-Z0-9_]{1,25}", token) else ""
+
+
 def word_matches(word, text):
     return bool(re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text, re.IGNORECASE))
 
@@ -29,19 +39,24 @@ def duration_text(seconds):
     return f"{seconds // 3600}h {(seconds % 3600) // 60}m {seconds % 60}s"
 
 
-def apply_response(template, values, counters, source, counter_keys=None):
+def apply_response(template, values, counters, source, counter_keys=None, extended=None):
     keys = {match[1] or source for match in COUNTER.finditer(template)}
     counter_keys = counter_keys or {}
     keys = {counter_keys.get(key, key) for key in keys}
     updated = dict(counters)
     for key in keys:
         updated[key] = updated.get(key, 0) + 1
-    # Single-pass substitution prevents viewer input from injecting new variables.
-    pattern = re.compile(r"\{counter(?::([a-z0-9_]{1,32}))?\}|\{([a-z_]+)\}")
+    # One pass: fetched text and viewer input are never interpreted as variables.
+    pattern = re.compile(DYNAMIC.pattern + r"|\{counter(?::[a-z0-9_]{1,32})?\}|\{[a-z_]+\}")
     def replace(match):
-        if match[0].startswith("{counter") and not match[2]:
-            return str(updated[counter_keys.get(match[1] or source, match[1] or source)])
-        return str(values.get(match[2], match[0]))
+        raw = match[0]
+        if raw in (extended or {}):
+            return extended[raw]
+        counter = COUNTER.fullmatch(raw)
+        if counter:
+            name = counter[1] or source
+            return str(updated[counter_keys.get(name, name)])
+        return str(values.get(raw[1:-1], raw))
     return pattern.sub(replace, template), updated
 
 
@@ -54,7 +69,7 @@ def attendance(data, session_number, break_on_miss):
     return data["streak"]
 
 
-class ResponseToolsMixin:
+class ResponseToolsMixin(ExtraVariablesMixin):
     def _tool_lock(self, guild_id):
         if not hasattr(self, "tool_locks"):
             self.tool_locks = {}
@@ -126,10 +141,11 @@ class ResponseToolsMixin:
         return keys, stream.get("game_name", stream["game_id"]), bid
 
     async def _render_shared(self, guild_id, template, *, user="", args="", source="response", twitch_id=None, login=None, extra=None, truncate=False):
-        values = {"user": user, "args": args, "url": "https://twitch.tv/" + login if login and re.fullmatch(r"[a-zA-Z0-9_]{1,25}", login) else "", "streak": 0}
+        values = {"user": user, "args": args, "target": target_mention(args), "url": "https://twitch.tv/" + login if login and re.fullmatch(r"[a-zA-Z0-9_]{1,25}", login) else "", "streak": 0}
         requested = set(VARIABLE.findall(template))
         if requested & STREAM_FIELDS:
             values.update(await self._stream_values(guild_id))
+        extended = await self._extra_variables(guild_id, template, twitch_id=twitch_id)
         names = {match[1] or source for match in COUNTER.finditer(template)}
         counter_keys, game, bid = await self._counter_context(guild_id, names)
         async with self._tool_lock(guild_id):
@@ -145,7 +161,7 @@ class ResponseToolsMixin:
                 values["streak"] = viewer.get("streak", 0)
             values.update(extra or {})
             counters = cfg.get("response_counters", {}) if COUNTER.search(template) else {}
-            text, updated = apply_response(template, values, counters, source, counter_keys)
+            text, updated = apply_response(template, values, counters, source, counter_keys, extended)
             if truncate:
                 text = " ".join(text.split())[:500]
             text = chat_text(text)

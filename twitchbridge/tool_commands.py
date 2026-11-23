@@ -2,7 +2,7 @@
 import discord
 from redbot.core import commands
 from .errors import BridgeError
-from .policy import chat_text
+from .policy import template_text
 from .response_tools import tool_name
 
 
@@ -66,7 +66,7 @@ class ToolCommandsMixin:
     @twitchtimer.command(name="add")
     async def timer_add(self, ctx, name: str, seconds: int, *, message: str):
         try:
-            name, message = tool_name(name), chat_text(message)
+            name, message = tool_name(name), template_text(message)
             if not 10 <= seconds <= 86400:
                 raise ValueError("Timer interval must be 10-86400 seconds.")
             def change(data):
@@ -105,7 +105,7 @@ class ToolCommandsMixin:
     @twitchtrigger.command(name="add")
     async def trigger_add(self, ctx, name: str, word: str, *, message: str):
         try:
-            name, message = tool_name(name), chat_text(message)
+            name, message = tool_name(name), template_text(message)
             if not word.strip() or len(word) > 100:
                 raise ValueError("Use a word/phrase of 1-100 characters; quote phrases containing spaces.")
             def change(data):
@@ -231,7 +231,7 @@ class ToolCommandsMixin:
     @twitchads.command(name="message")
     async def ads_message(self, ctx, *, message: str):
         try:
-            message = chat_text(message)
+            message = template_text(message)
             await self._edit_tools(ctx.guild, "ad_settings", lambda data: data.update(message=message))
             await ctx.send("Ad warning message saved.")
         except ValueError as exc:
@@ -295,7 +295,7 @@ class ToolCommandsMixin:
     @twitchfirst.command(name="message")
     async def first_message(self, ctx, *, message: str):
         try:
-            message = chat_text(message)
+            message = template_text(message)
             await self._edit_tools(ctx.guild, "first_message", lambda data: data.update(message=message))
             await ctx.send("Default greeting saved.")
         except ValueError as exc:
@@ -304,7 +304,7 @@ class ToolCommandsMixin:
     @twitchfirst.command(name="user")
     async def first_user(self, ctx, username: str, *, message: str):
         try:
-            identity, message = await self._lookup_twitch(username), chat_text(message)
+            identity, message = await self._lookup_twitch(username), template_text(message)
             await self._edit_tools(ctx.guild, "first_message", lambda data: data.setdefault("users", {}).__setitem__(identity["id"], message))
             await ctx.send("Per-user greeting saved.")
         except (BridgeError, ValueError) as exc:

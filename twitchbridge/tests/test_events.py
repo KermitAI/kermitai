@@ -32,7 +32,7 @@ class EventPolicyTests(unittest.TestCase):
         self.assertEqual(specs["cheer"]["type"], "channel.cheer")
 
     def test_templates_reject_format_code_and_unavailable_fields(self):
-        for template in ("{user.__class__}", "{user!r}", "{user:1000}", "{bits}", "broken {", "", "x" * 501):
+        for template in ("{user.__class__}", "{user!r}", "{user:1000}", "{bits}", "broken {", "", "x" * 4001):
             with self.assertRaises(ValueError):
                 VALIDATE("follow", template)
         self.assertEqual(VALIDATE("cheer", "Thanks {user} for {bits}!"), "Thanks {user} for {bits}!")
@@ -130,6 +130,12 @@ class EventTests(unittest.IsolatedAsyncioTestCase):
         ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
         await self.cog.event_preview(ctx, "raid")
         self.assertIn("They last played Example game", ctx.send.call_args.args[0])
+
+    async def test_extended_variables_are_resolved_in_event_delivery(self):
+        self.cfg["channel_events"]["messages"]["follow"] = '{user}: {choose "Only reply"}'
+        self.notify("follow")
+        await self.drain()
+        self.assertEqual(self.cog._send_twitch.call_args.args[1], "Viewer: Only reply")
 
     def test_duplicate_events_queue_once(self):
         self.notify("follow")
