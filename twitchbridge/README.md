@@ -1092,3 +1092,21 @@ not verify the account exists or create a Discord account mention.
 ```
 Both `!cheer username` and `!cheer @username` respond with
 `Let's hear it for @username!`. Do not put another `@` before `{target}`.
+
+### Annually repeating countdowns
+
+Omit the year to count down to the next occurrence in the specified timezone:
+```
+{countdown dec 25 12:00:00 AM America/Toronto}
+{countdown December 25 00:00:00 America/Toronto}
+{countdown 12-25 00:00:00 America/Toronto}
+```
+Once the target time is reached, the countdown automatically targets the next
+year. February 29 advances to the next leap year. An explicitly supplied year
+still makes a fixed countdown that stays at zero once past. Annual countdowns
+use the same full months, weeks, days and hours output. Timezones follow their
+usual DST rules; nonexistent local times are rejected.
+
+```
+.twitchcommand edit christmas Christmas is in {countdown dec 25 12:00:00 AM America/Toronto}!
+```

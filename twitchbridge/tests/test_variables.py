@@ -20,6 +20,36 @@ class VariablePolicyTests(unittest.TestCase):
         iso = V["countdown_target"](["2025-12-25", "00:00:00", "EST"])
         self.assertEqual(target, iso)
 
+    def test_annual_countdown_rolls_to_next_occurrence(self):
+        args = ["dec", "25", "12:00:00", "AM", "UTC"]
+        for now, year in [(datetime(2026, 12, 24, tzinfo=timezone.utc), 2026),
+                          (datetime(2026, 12, 25, tzinfo=timezone.utc), 2027),
+                          (datetime(2026, 12, 26, tzinfo=timezone.utc), 2027)]:
+            self.assertEqual(V["countdown_target"](args, now=now).year, year)
+
+    def test_annual_formats_and_timezone_choose_local_year(self):
+        now = datetime(2027, 1, 1, 1, tzinfo=timezone.utc)
+        for args in (["dec", "31", "11:00:00", "PM", "EST"],
+                     ["December", "31", "23:00:00", "EST"], ["12-31", "23:00:00", "EST"]):
+            target = V["countdown_target"](args, now=now)
+            self.assertEqual((target.year, target.month, target.day, target.hour), (2026, 12, 31, 23))
+            self.assertGreater(target, now)
+
+    def test_annual_leap_day_finds_next_valid_year(self):
+        args = ["feb", "29", "12:00:00", "AM", "UTC"]
+        for now, year in [(datetime(2026, 1, 1, tzinfo=timezone.utc), 2028),
+                          (datetime(2028, 3, 1, tzinfo=timezone.utc), 2032)]:
+            self.assertEqual(V["countdown_target"](args, now=now).year, year)
+        with self.assertRaises(ValueError):
+            V["countdown_target"](["feb", "30", "12:00:00", "AM", "UTC"])
+
+    def test_fixed_countdown_does_not_roll_and_annual_dst_gap_is_rejected(self):
+        now = datetime(2026, 12, 26, tzinfo=timezone.utc)
+        self.assertEqual(V["countdown_target"](["dec", "25", "2026", "12:00:00", "AM", "UTC"], now=now).year, 2026)
+        with self.assertRaises(ValueError):
+            V["countdown_target"](["mar", "8", "02:30:00", "America/Toronto"],
+                                  now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
     def test_calendar_months_weeks_days_hours_and_past(self):
         start = datetime(2026, 1, 31, tzinfo=timezone.utc)
         end = datetime(2026, 3, 9, 5, tzinfo=timezone.utc)

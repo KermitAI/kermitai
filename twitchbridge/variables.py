@@ -85,21 +85,44 @@ def parse_variable(body):
     return name, args
 
 
-def countdown_target(args):
+def countdown_target(args, now=None):
     if len(args) < 3:
-        raise ValueError("Use {countdown 2026-12-25 00:00:00 America/Toronto}.")
+        raise ValueError("Use {countdown dec 25 12:00:00 AM America/Toronto}, optionally including a year.")
     tz = zone(args[-1])
     value = " ".join(args[:-1])
+
+    def local_target(value):
+        target = value.replace(tzinfo=tz)
+        # Reject nonexistent times during spring DST; autumn uses the first occurrence.
+        if target.astimezone(timezone.utc).astimezone(tz).replace(tzinfo=None) != target.replace(tzinfo=None):
+            raise ValueError("That local time does not exist due to daylight saving time.")
+        return target
+
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %I:%M:%S %p", "%b %d %Y %I:%M:%S %p", "%B %d %Y %I:%M:%S %p"):
         try:
-            target = datetime.strptime(value, fmt).replace(tzinfo=tz)
-            # Reject nonexistent local times during a daylight-saving jump.
-            if target.astimezone(timezone.utc).astimezone(tz).replace(tzinfo=None) != target.replace(tzinfo=None):
-                raise ValueError("That local time does not exist due to daylight saving time.")
-            return target
+            parsed = datetime.strptime(value, fmt)
         except ValueError:
             continue
-    raise ValueError("Invalid countdown date or time; use YYYY-MM-DD HH:MM:SS timezone.")
+        return local_target(parsed)
+
+    # Parse with a leap-year anchor so February 29 is a valid annual date.
+    for fmt in ("%m-%d %H:%M:%S", "%m-%d %I:%M:%S %p", "%b %d %H:%M:%S", "%B %d %H:%M:%S",
+                "%b %d %I:%M:%S %p", "%B %d %I:%M:%S %p"):
+        try:
+            parsed = datetime.strptime("2000 " + value, "%Y " + fmt)
+        except ValueError:
+            continue
+        current = (now or datetime.now(timezone.utc)).astimezone(tz)
+        for year in range(current.year, min(current.year + 9, 10000)):
+            try:
+                candidate = parsed.replace(year=year)
+            except ValueError:
+                continue  # February 29 resumes at the next leap year.
+            if candidate <= current.replace(tzinfo=None):
+                continue
+            return local_target(candidate)
+        raise ValueError("No future occurrence can be represented for this countdown.")
+    raise ValueError("Invalid countdown date or time; use dec 25 [year] 12:00:00 AM timezone.")
 
 
 def public_url(value):
@@ -241,8 +264,9 @@ class ExtraVariablesMixin:
         for raw, name, args in expressions:
             try:
                 if name == "countdown":
-                    target = countdown_target(args)
-                    value = calendar_duration(datetime.now(target.tzinfo), target)
+                    now = datetime.now(timezone.utc)
+                    target = countdown_target(args, now=now)
+                    value = calendar_duration(now.astimezone(target.tzinfo), target)
                 elif name == "time":
                     value = datetime.now(zone(args[0])).strftime("%Y-%m-%d %H:%M:%S %Z")
                 elif name == "random":
