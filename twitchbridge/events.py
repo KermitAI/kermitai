@@ -38,6 +38,9 @@ FIELDS = {
     "cheer": {"user", "channel", "url", "bits", "message"},
     "raid": {"user", "channel", "url", "viewers"},
 }
+for fields in FIELDS.values():
+    fields.update({"game", "usergame"})
+
 EVENT_DEFAULTS = {"enabled": False, "mode": "chat", "revision": 0,
                   "types": {kind: True for kind in EVENTS},
                   "messages": DEFAULT_MESSAGES, "cooldowns": {kind: 0 for kind in EVENTS}}
@@ -64,7 +67,7 @@ def validate_event_template(kind, template):
     return template.strip()
 
 
-def render_event(kind, template, event, channel):
+def render_event(kind, template, event, channel, game="Unknown game", usergame="Unknown game"):
     anonymous = bool(event.get("is_anonymous"))
     raid = kind == "raid"
     prefix = "from_broadcaster_" if raid else ""
@@ -75,7 +78,7 @@ def render_event(kind, template, event, channel):
     message = event.get("message", "")
     if isinstance(message, dict):
         message = message.get("text", "")
-    values = {"user": user, "url": url, "channel": channel,
+    values = {"user": user, "url": url, "channel": channel, "game": game, "usergame": usergame,
               "tier": {"1000": "1", "2000": "2", "3000": "3", "Prime": "Prime"}.get(event.get("tier"), "1"),
               "months": event.get("cumulative_months", 0), "count": event.get("total", 1),
               "bits": event.get("bits", 0), "viewers": event.get("viewers", 0), "message": message}
@@ -261,6 +264,24 @@ class ChannelEventsMixin:
         return (cfg["enabled"] and settings.get("enabled") and settings.get("revision", 0) == revision
                 and settings.get("types", {}).get(kind, True) and time.monotonic() - received <= MAX_EVENT_AGE)
 
+    async def _event_usergame(self, kind, template, event):
+        if "{usergame}" not in template:
+            return ""
+        # Never resolve identity for anonymous gifts or cheers, even if present.
+        uid = event.get("from_broadcaster_user_id" if kind == "raid" else "user_id")
+        if event.get("is_anonymous") or not uid:
+            return "Unknown game"
+        try:
+            client_id, auth = await self._token()
+            code, body = await self._request("GET", API + "channels",
+                params={"broadcaster_id": str(uid)},
+                headers={"Client-Id": client_id, "Authorization": "Bearer " + auth["access_token"]})
+            if code == 200 and body.get("data"):
+                return body["data"][0].get("game_name") or "Unknown game"
+        except (BridgeError, aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError, TypeError):
+            pass
+        return "Unknown game"
+
     async def _event_sender_loop(self):
         while True:
             guild_id, broadcaster_id, revision, kind, received, event = await self.event_queue.get()
@@ -275,7 +296,9 @@ class ChannelEventsMixin:
                     self._event_count(guild_id, "dropped")
                     continue
                 template = settings.get("messages", {}).get(kind, DEFAULT_MESSAGES[kind])
-                text = render_event(kind, template, event, cfg["broadcaster"])
+                game = await self._template_game(guild_id, template)
+                usergame = await self._event_usergame(kind, template, event)
+                text = render_event(kind, template, event, cfg["broadcaster"], game, usergame)
                 if not text:
                     raise ValueError("The event message rendered as empty text.")
                 await self._send_twitch(guild_id, text, expected_broadcaster=broadcaster_id,
@@ -391,7 +414,8 @@ class ChannelEventsMixin:
                    "from_broadcaster_user_name": "ExampleRaider", "from_broadcaster_user_login": "exampleraider",
                    "message": {"text": "Great stream!"} if kind == "resub" else "Great stream!"}
         template = cfg.get("channel_events", {}).get("messages", {}).get(kind, DEFAULT_MESSAGES[kind])
-        text = render_event(kind, template, example, cfg["broadcaster"] or "your channel")
+        game = await self._template_game(ctx.guild.id, template)
+        text = render_event(kind, template, example, cfg["broadcaster"] or "your channel", game, "Example game")
         await ctx.send(f"Preview ({kind}): {text}", allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
 
     @twitchevents.command(name="status")

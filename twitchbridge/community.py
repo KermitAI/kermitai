@@ -415,7 +415,9 @@ class CommunityMixin(LinkingMixin):
             now = time.monotonic()
             if now < self.shoutout_cooldowns.get(guild_id, 0):
                 raise BridgeError("A shoutout was sent recently. Wait for its cooldown.")
-            text = shoutout_text(cfg.get("shoutout_message", DEFAULT_SHOUTOUT), identity, cfg["broadcaster"])
+            template = cfg.get("shoutout_message", DEFAULT_SHOUTOUT)
+            game = await self._template_game(guild_id, template)
+            text = shoutout_text(template, identity, cfg["broadcaster"], game)
             self.shoutout_cooldowns[guild_id] = now + cfg.get("shoutout_cooldown", 60)
             broadcaster_id = cfg["broadcaster_id"]
         await self._send_twitch(guild_id, text, expected_broadcaster=broadcaster_id)

@@ -901,3 +901,99 @@ No live channel settings were changed during development.
 Twitch references:
 https://dev.twitch.tv/docs/api/reference/channels#modify-channel-information
 https://dev.twitch.tv/docs/api/reference/search#search-categories
+
+
+## Custom command aliases
+
+Bot owners can give any TwitchBridge custom command up to ten alternate names:
+
+```
+[p]twitchcommand alias add socials links
+[p]twitchcommand alias add socials social
+[p]twitchcommand alias list socials
+[p]twitchcommand alias list
+[p]twitchcommand alias remove links
+```
+
+Create the original command with `twitchcommand add` first. An enabled Twitch
+command `!socials` can then also be invoked as `!links` or `!social`, with the same
+arguments and response. On Discord, the normal prefix works for each name when
+the original command's platform is discord or both.
+
+Aliases share the canonical command's permission checks, platform setting,
+cooldown and implicit `{counter}`. They cannot bypass a cooldown or create an
+independent death counter. Editing any alias edits the original response, so all
+names stay in sync. Aliases point directly to the original, including when the
+alias-add target is itself an alias. Names are case-insensitive and follow normal
+custom-command naming rules.
+
+Names already used by another custom command, alias, TwitchBridge built-in or
+currently registered Discord command are rejected. Future Discord command-name
+collisions still give precedence to the registered Discord command; choose unique
+names. No extra Twitch permission or authorization is needed.
+
+`alias remove <alias>` removes only that alternate name. `twitchcommand remove`
+with an alias name also removes just that alias. Removing the original command
+removes all its aliases. `twitchcommand list` now shows aliases and paginates output.
+Existing saved commands need no migration; absent aliases mean an empty list.
+
+This feature manages TwitchBridge custom responses. It does not rename or create
+aliases for unrelated Red cogs or the built-in stream-management command groups.
+
+### Per-game death counters
+
+Enable separate game totals for your counter (use its existing name):
+```
+.twitchcounter pergame deaths true
+.twitchcommand add death {game} deaths: {counter:deaths}
+.twitchcounter view deaths
+.twitchcounter set deaths 25
+.twitchcounter reset deaths
+```
+If `death` already exists, use `twitchcommand edit` instead of `add`.
+Twitch `!death` increments the current game's total. Twitch's selected category is
+checked fresh on each use; returning to a game resumes that game's saved total.
+Storage is separate per broadcaster and Twitch category ID, shared between Discord
+and Twitch. A live stream with a selected category is required. This detects the
+category, not deaths inside the game: each accepted counter command adds one.
+View, set and reset apply only to the current game. Previous global totals remain
+untouched; set the current game's value manually to migrate an old total.
+`.twitchcounter pergame deaths false` returns to the preserved global counter.
+For an existing response using plain `{counter}`, enable per-game tracking for the
+original command's name instead (aliases use the original name). Other counters
+remain global unless explicitly enabled.
+
+### Game variable across message features
+
+`{game}` is supported in custom commands, word triggers, timers, first-message
+messages (including per-user overrides), ad warnings, shoutouts, and all six
+channel-event message types and their Discord previews. It always means the
+linked broadcaster's current Twitch category, including in raid and shoutout
+messages; it does not describe the visitor's game. Offline it uses the last
+configured category. Stream metadata is cached for up to 30 seconds. Events and
+shoutouts use `Unknown game` when category lookup fails or no category is set,
+so an unavailable category does not suppress the alert. Existing templates
+without `{game}` do not require an additional category lookup.
+
+```
+.twitchevents message follow Thanks for following, {user}! Enjoy {game}!
+.twitchevents preview follow
+.twitchset shoutoutmessage Follow {user} at {url}! We're playing {game} here.
+.twitchtrigger add gamecheck "what game" We're playing {game}!
+```
+
+### Event user's game
+
+All `twitchevents` message types also accept `{usergame}`. It resolves the event
+actor's channel category: the follower, subscriber, resubscriber, gift sender,
+cheerer, or incoming raider. `{game}` still means the linked broadcaster's category.
+The lookup happens only when `{usergame}` is used and needs no additional user
+authorization. Offline it reads their currently configured category, generally
+the last streamed category; it is not a historical record and can change offline.
+Anonymous events, missing categories and lookup failures use `Unknown game`.
+Discord previews use `Example game` for this placeholder.
+
+```
+.twitchevents message raid Welcome {user} and your {viewers} raiders! They last played {usergame}! Follow them: {url}
+.twitchevents preview raid
+```

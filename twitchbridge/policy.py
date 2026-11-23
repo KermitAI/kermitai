@@ -108,6 +108,16 @@ def twitch_target(value):
     return login_name(value.lstrip("@"))
 
 
-def shoutout_text(template, identity, channel):
-    values = {"user": identity["display_name"], "url": "https://twitch.tv/" + identity["login"], "channel": channel}
-    return chat_text(re.sub(r"\{(user|url|channel)\}", lambda m: values[m[1]], template))
+def shoutout_text(template, identity, channel, game="Unknown game"):
+    values = {"user": identity["display_name"], "url": "https://twitch.tv/" + identity["login"], "channel": channel, "game": game}
+    return chat_text(re.sub(r"\{(user|url|channel|game)\}", lambda m: values[m[1]], template))
+
+
+def resolve_custom_command(records, name):
+    """Resolve an alternate name directly to its canonical command record."""
+    if name in records:
+        return name, records[name]
+    for canonical, record in records.items():
+        if name in record.get("aliases", []):
+            return canonical, record
+    return None, None

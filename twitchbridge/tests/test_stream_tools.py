@@ -63,6 +63,40 @@ class StreamToolsTests(unittest.IsolatedAsyncioTestCase):
         await self.cog.counter_set(ctx, "deaths", 50)
         self.assertEqual(await self.cog._render_shared(1, "{counter:deaths}"), "51")
 
+    async def test_game_counters_resume_each_game_and_preserve_global_total(self):
+        self.cfg.update(game_counters=["deaths"], response_counters={"deaths": 99})
+        self.live["stream"].update(game_id="a", game_name="Game A")
+        self.assertEqual(await self.cog._render_shared(1, "{counter:deaths} {counter:deaths}"), "1 1")
+        self.live["stream"].update(game_id="b", game_name="Game B")
+        self.assertEqual(await self.cog._render_shared(1, "{counter}", source="deaths"), "1")
+        self.live["stream"].update(game_id="a", game_name="Game A")
+        self.assertEqual(await self.cog._render_shared(1, "{counter:deaths} {game}"), "2 Game A")
+        self.assertEqual(self.cfg["response_counters"]["deaths"], 99)
+        self.cog._stream_info.assert_awaited_with(1, force=True)
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        await self.cog.counter_set(ctx, "deaths", 50)
+        await self.cog.counter_view(ctx, "deaths")
+        self.assertIn("Game A: 50", ctx.send.call_args.args[0])
+        await self.cog.counter_reset(ctx, "deaths")
+        self.assertEqual(self.cfg["response_counters"]["game:stream:a:deaths"], 0)
+        self.assertEqual(self.cfg["response_counters"]["game:stream:b:deaths"], 1)
+        await self.cog.counter_pergame(ctx, "deaths", False)
+        self.assertEqual(await self.cog._render_shared(1, "{counter:deaths}"), "100")
+
+    async def test_game_counter_requires_live_category_and_is_broadcaster_specific(self):
+        self.cfg["game_counters"] = ["deaths"]
+        self.live["stream"]["game_id"] = "a"
+        await asyncio.gather(*[self.cog._render_shared(1, "{counter:deaths}") for _ in range(5)])
+        self.assertEqual(self.cfg["response_counters"]["game:stream:a:deaths"], 5)
+        self.cfg["broadcaster_id"] = "other"
+        self.live["broadcaster_id"] = "other"
+        self.assertEqual(await self.cog._render_shared(1, "{counter:deaths}"), "1")
+        before = copy.deepcopy(self.cfg["response_counters"])
+        self.live["stream"] = None
+        with self.assertRaises(module.BridgeError):
+            await self.cog._render_shared(1, "{counter:deaths}")
+        self.assertEqual(before, self.cfg["response_counters"])
+
     async def test_failed_render_does_not_increment_counter(self):
         with self.assertRaises(ValueError):
             await self.cog._render_shared(1, "{counter}" + "x" * 501, source="deaths")

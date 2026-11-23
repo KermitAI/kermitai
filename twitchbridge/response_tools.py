@@ -29,8 +29,10 @@ def duration_text(seconds):
     return f"{seconds // 3600}h {(seconds % 3600) // 60}m {seconds % 60}s"
 
 
-def apply_response(template, values, counters, source):
+def apply_response(template, values, counters, source, counter_keys=None):
     keys = {match[1] or source for match in COUNTER.finditer(template)}
+    counter_keys = counter_keys or {}
+    keys = {counter_keys.get(key, key) for key in keys}
     updated = dict(counters)
     for key in keys:
         updated[key] = updated.get(key, 0) + 1
@@ -38,7 +40,7 @@ def apply_response(template, values, counters, source):
     pattern = re.compile(r"\{counter(?::([a-z0-9_]{1,32}))?\}|\{([a-z_]+)\}")
     def replace(match):
         if match[0].startswith("{counter") and not match[2]:
-            return str(updated[match[1] or source])
+            return str(updated[counter_keys.get(match[1] or source, match[1] or source)])
         return str(values.get(match[2], match[0]))
     return pattern.sub(replace, template), updated
 
@@ -100,21 +102,50 @@ class ResponseToolsMixin:
         info["offline_values"] = values
         return values
 
+    async def _template_game(self, guild_id, template):
+        """Fetch only when requested; optional enrichment must not lose an alert."""
+        if "{game}" not in template:
+            return ""
+        try:
+            return (await self._stream_values(guild_id)).get("game") or "Unknown game"
+        except BridgeError:
+            return "Unknown game"
+
+    async def _counter_context(self, guild_id, names):
+        cfg = await self.config.guild_from_id(guild_id).all()
+        scoped = set(names) & set(cfg.get("game_counters", []))
+        if not scoped:
+            return {}, "", cfg["broadcaster_id"]
+        # A fresh lookup prevents a recent category change using the previous game's total.
+        info = await self._stream_info(guild_id, force=True)
+        stream = info["stream"]
+        if not stream or not stream.get("game_id"):
+            raise BridgeError("Game counters require a live stream with a Twitch category selected.")
+        bid = info["broadcaster_id"]
+        keys = {name: f"game:{bid}:{stream['game_id']}:{name}" for name in scoped}
+        return keys, stream.get("game_name", stream["game_id"]), bid
+
     async def _render_shared(self, guild_id, template, *, user="", args="", source="response", twitch_id=None, login=None, extra=None, truncate=False):
         values = {"user": user, "args": args, "url": "https://twitch.tv/" + login if login and re.fullmatch(r"[a-zA-Z0-9_]{1,25}", login) else "", "streak": 0}
         requested = set(VARIABLE.findall(template))
         if requested & STREAM_FIELDS:
             values.update(await self._stream_values(guild_id))
+        names = {match[1] or source for match in COUNTER.finditer(template)}
+        counter_keys, game, bid = await self._counter_context(guild_id, names)
         async with self._tool_lock(guild_id):
             group = self.config.guild_from_id(guild_id)
             cfg = await group.all()
+            if cfg["broadcaster_id"] != bid or (names & set(cfg.get("game_counters", []))) != set(counter_keys):
+                raise BridgeError("Counter settings changed; please try again.")
+            if game:
+                values["game"] = game
             values["channel"] = cfg["broadcaster"]
             if twitch_id and "streak" in requested:
                 viewer = cfg.get("viewer_data", {}).get(cfg["broadcaster_id"], {}).get(str(twitch_id), {})
                 values["streak"] = viewer.get("streak", 0)
             values.update(extra or {})
             counters = cfg.get("response_counters", {}) if COUNTER.search(template) else {}
-            text, updated = apply_response(template, values, counters, source)
+            text, updated = apply_response(template, values, counters, source, counter_keys)
             if truncate:
                 text = " ".join(text.split())[:500]
             text = chat_text(text)

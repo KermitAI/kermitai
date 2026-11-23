@@ -10,7 +10,7 @@ import discord
 from redbot.core import Config, commands
 
 from .policy import (RecentMessages, log_line, login_name, reconnect_url, command_name,
-                     chat_text, render_response, parse_command, twitch_level, command_allowed)
+                     chat_text, render_response, parse_command, twitch_level, command_allowed, resolve_custom_command)
 from .errors import BridgeError
 from .community import CommunityMixin, ROLE_SCOPES, DEFAULT_SHOUTOUT
 from .scopes import BOT_SCOPES, BROADCASTER_SCOPES
@@ -40,7 +40,7 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
                                    link_panel={}, link_panel_label="Link Twitch account",
                                    link_panel_text="Link your Twitch account to receive your server roles.",
                                    channel_events=copy.deepcopy(EVENT_DEFAULTS), automation_revision=0,
-                                   timers={}, chat_triggers={}, response_counters={}, todo_items=[], todo_permission="moderator",
+                                   timers={}, chat_triggers={}, response_counters={}, game_counters=[], todo_items=[], todo_permission="moderator",
                                    ad_settings=copy.deepcopy(AD_DEFAULTS), ad_notices={}, ad_warning_pause_until=0,
                                    first_message=copy.deepcopy(FIRST_DEFAULTS), streak_settings=copy.deepcopy(STREAK_DEFAULTS),
                                    stream_session={}, viewer_data={})
@@ -565,7 +565,7 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
             cfg = await self.config.guild_from_id(guild_id).all()
             if not cfg["enabled"] or (broadcaster_id is not None and cfg["broadcaster_id"] != broadcaster_id):
                 return None
-            record = cfg.get("custom_commands", {}).get(name)
+            name, record = resolve_custom_command(cfg.get("custom_commands", {}), name)
             if not record or not command_allowed(record, platform, level):
                 return None
             key = (guild_id, name)
@@ -734,8 +734,8 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
             return
         async with self._command_lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).custom_commands() as records:
-                if name in records:
-                    await ctx.send("That command exists. Use twitchcommand edit.")
+                if resolve_custom_command(records, name)[0] is not None:
+                    await ctx.send("That name is already a command or alias. Use twitchcommand edit to change its response.")
                     return
                 if len(records) >= 250:
                     await ctx.send("This server already has 250 custom commands.")
@@ -751,10 +751,11 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
             return
         async with self._command_lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).custom_commands() as records:
-                if name not in records:
+                name, record = resolve_custom_command(records, name)
+                if record is None:
                     await ctx.send("Command not found.")
                     return
-                records[name][field] = value
+                record[field] = value
         await ctx.send(f"Command `{name}` updated.")
 
     @twitchcommand.command(name="edit")
@@ -795,23 +796,111 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
 
     @twitchcommand.command(name="remove", aliases=["delete"])
     async def command_remove(self, ctx, name: str):
-        """Delete a custom command."""
+        """Delete a command and its aliases, or remove only the named alias."""
         name = name.lower().lstrip("!")
         async with self._command_lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).custom_commands() as records:
-                removed = records.pop(name, None)
-            self.cooldowns.pop((ctx.guild.id, name), None)
-        await ctx.send("Command removed." if removed else "Command not found.")
+                canonical, record = resolve_custom_command(records, name)
+                if record is None:
+                    reply = "Command not found."
+                elif name != canonical:
+                    record["aliases"].remove(name)
+                    reply = f"Alias `{name}` removed. The original command remains."
+                else:
+                    records.pop(canonical)
+                    self.cooldowns.pop((ctx.guild.id, canonical), None)
+                    reply = "Command and its aliases removed."
+        await ctx.send(reply)
+
+    async def _send_command_lines(self, ctx, lines):
+        page = ""
+        for line in lines:
+            if page and len(page) + len(line) + 1 > 1800:
+                await ctx.send(page, allowed_mentions=discord.AllowedMentions.none())
+                page = ""
+            page += ("\n" if page else "") + line
+        if page:
+            await ctx.send(page, allowed_mentions=discord.AllowedMentions.none())
 
     @twitchcommand.command(name="list")
     async def command_list(self, ctx):
-        """List names, platforms, permissions and cooldowns."""
+        """List names, aliases, platforms, permissions and cooldowns."""
         records = await self.config.guild(ctx.guild).custom_commands()
-        lines = [f"{name}: {r['platform']} | {r['permission']} | {r['cooldown']}s" for name, r in sorted(records.items())]
-        if not lines:
-            await ctx.send("No custom commands configured.")
-        for start in range(0, len(lines), 15):
-            await ctx.send("\n".join(lines[start:start + 15]), allowed_mentions=discord.AllowedMentions.none())
+        lines = []
+        for name, record in sorted(records.items()):
+            aliases = ", ".join(record.get("aliases", [])) or "none"
+            lines.append(f"{name}: {record['platform']} | {record['permission']} | {record['cooldown']}s | aliases: {aliases}")
+        await self._send_command_lines(ctx, lines or ["No custom commands configured."])
+
+    @twitchcommand.group(name="alias", invoke_without_command=True)
+    @commands.is_owner()
+    @commands.guild_only()
+    async def command_alias(self, ctx):
+        """Manage alternate names for custom commands."""
+        await ctx.send_help()
+
+    @command_alias.command(name="add")
+    @commands.is_owner()
+    @commands.guild_only()
+    async def alias_add(self, ctx, name: str, alias: str):
+        """Add an alias: twitchcommand alias add <existing-command> <alias>."""
+        try:
+            name, alias = command_name(name), command_name(alias)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        if self.bot.get_command(alias):
+            await ctx.send("That alias belongs to a registered Discord command; choose another name.")
+            return
+        async with self._command_lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).custom_commands() as records:
+                canonical, record = resolve_custom_command(records, name)
+                if record is None:
+                    await ctx.send("Command not found. Create it with twitchcommand add first.")
+                    return
+                if resolve_custom_command(records, alias)[0] is not None:
+                    await ctx.send("That name is already a command or alias.")
+                    return
+                aliases = record.setdefault("aliases", [])
+                if len(aliases) >= 10:
+                    await ctx.send("A command can have up to 10 aliases.")
+                    return
+                aliases.append(alias)
+        await ctx.send(f"Alias `{alias}` added for `{canonical}`.")
+
+    @command_alias.command(name="remove", aliases=["delete"])
+    @commands.is_owner()
+    @commands.guild_only()
+    async def alias_remove(self, ctx, alias: str):
+        """Remove an alternate name while preserving the original command."""
+        alias = alias.lower().lstrip("!")
+        async with self._command_lock(ctx.guild.id):
+            async with self.config.guild(ctx.guild).custom_commands() as records:
+                canonical, record = resolve_custom_command(records, alias)
+                if record is None:
+                    reply = "Alias not found."
+                elif canonical == alias:
+                    reply = "That is the original command name. Use twitchcommand remove to delete the command."
+                else:
+                    record["aliases"].remove(alias)
+                    reply = f"Alias `{alias}` removed."
+        await ctx.send(reply)
+
+    @command_alias.command(name="list")
+    @commands.is_owner()
+    @commands.guild_only()
+    async def alias_list(self, ctx, name: str = ""):
+        """List aliases for one command, or for all commands in this server."""
+        records = await self.config.guild(ctx.guild).custom_commands()
+        if name:
+            canonical, record = resolve_custom_command(records, name.lower().lstrip("!"))
+            if record is None:
+                await ctx.send("Command not found.")
+                return
+            records = {canonical: record}
+        lines = [f"{canonical}: {', '.join(record.get('aliases', [])) or 'no aliases'}"
+                 for canonical, record in sorted(records.items())]
+        await self._send_command_lines(ctx, lines or ["No custom commands configured."])
 
     @twitchset.command(name="announcements")
     async def announcement_channel(self, ctx, channel: discord.TextChannel):

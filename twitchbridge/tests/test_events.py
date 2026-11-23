@@ -19,6 +19,11 @@ KINDS = tuple(events["EVENTS"])
 
 
 class EventPolicyTests(unittest.TestCase):
+    def test_every_event_accepts_game_without_reparsing_its_value(self):
+        for kind in KINDS:
+            self.assertEqual(VALIDATE(kind, "Playing {game}"), "Playing {game}")
+            self.assertEqual(RENDER(kind, "Playing {game}", {}, "channel", "Game {user}"), "Playing Game {user}")
+
     def test_subscription_versions_and_incoming_raid_conditions(self):
         specs = SPECS("123", KINDS)
         self.assertEqual(specs["follow"]["version"], "2")
@@ -77,6 +82,54 @@ class EventTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.cog.event_queue.join(), 1)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+    async def test_game_is_resolved_for_delivery_and_discord_preview(self):
+        self.cog._stream_values = AsyncMock(return_value={"game": "Minecraft"})
+        self.cfg["channel_events"]["messages"]["follow"] = "Enjoy {game}, {user}!"
+        self.notify("follow")
+        await self.drain()
+        self.assertEqual(self.cog._send_twitch.call_args.args[1], "Enjoy Minecraft, Viewer!")
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        await self.cog.event_preview(ctx, "follow")
+        self.assertIn("Minecraft", ctx.send.call_args.args[0])
+
+    async def test_missing_category_does_not_drop_event(self):
+        self.cog._stream_values = AsyncMock(side_effect=module.BridgeError("Unavailable"))
+        self.cfg["channel_events"]["messages"]["follow"] = "Enjoy {game}!"
+        self.notify("follow")
+        await self.drain()
+        self.assertEqual(self.cog._send_twitch.call_args.args[1], "Enjoy Unknown game!")
+
+    async def test_usergame_uses_event_actor_and_raid_source(self):
+        self.cog._token = AsyncMock(return_value=("client", {"access_token": "token"}))
+        self.cog._request = AsyncMock(return_value=(200, {"data": [{"game_name": "Stardew Valley"}]}))
+        for kind in KINDS:
+            payload = {"user_id": "viewer", "from_broadcaster_user_id": "raider", "broadcaster_user_id": "stream"}
+            self.assertEqual(await self.cog._event_usergame(kind, "{usergame}", payload), "Stardew Valley")
+            self.assertEqual(self.cog._request.call_args.kwargs["params"],
+                             {"broadcaster_id": "raider" if kind == "raid" else "viewer"})
+            self.assertEqual(VALIDATE(kind, "They last played {usergame}"), "They last played {usergame}")
+            self.assertEqual(RENDER(kind, "{game}|{usergame}", payload, "channel", "Minecraft", "Stardew Valley"), "Minecraft|Stardew Valley")
+
+    async def test_usergame_anonymous_missing_or_unused_skips_lookup(self):
+        self.cog._token = AsyncMock()
+        for template, payload in [("{usergame}", {"is_anonymous": True, "user_id": "secret"}),
+                                  ("{usergame}", {}), ("{user}", {"user_id": "viewer"})]:
+            await self.cog._event_usergame("cheer", template, payload)
+        self.cog._token.assert_not_awaited()
+
+    async def test_usergame_failure_does_not_drop_raid(self):
+        self.cog._token = AsyncMock(side_effect=module.BridgeError("Unavailable"))
+        self.cfg["channel_events"]["messages"]["raid"] = "{user} last played {usergame}"
+        self.notify("raid", {"to_broadcaster_user_id": "stream", "from_broadcaster_user_id": "raider", "from_broadcaster_user_name": "Raider"})
+        await self.drain()
+        self.assertEqual(self.cog._send_twitch.call_args.args[1], "Raider last played Unknown game")
+
+    async def test_usergame_preview_uses_sample_category(self):
+        self.cfg["channel_events"]["messages"]["raid"] = "They last played {usergame}"
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        await self.cog.event_preview(ctx, "raid")
+        self.assertIn("They last played Example game", ctx.send.call_args.args[0])
 
     def test_duplicate_events_queue_once(self):
         self.notify("follow")

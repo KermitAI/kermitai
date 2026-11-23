@@ -183,6 +183,15 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         await self.cog.red_delete_data_for_user(requester="user", user_id=99)
         self.assertEqual(self.cfg["managed_roles"], {})
 
+    async def test_shoutout_game_uses_linked_broadcaster_category(self):
+        self.cfg["shoutout_message"] = "Follow {user} at {url}! Playing {game} here."
+        self.cog._lookup_twitch = AsyncMock(return_value={"id": "luna", "login": "luna", "display_name": "Luna"})
+        self.cog._stream_values = AsyncMock(return_value={"game": "Minecraft"})
+        self.cog._send_twitch = AsyncMock()
+        text = await self.cog._shoutout(1, "luna")
+        self.assertEqual(text, "Follow Luna at https://twitch.tv/luna! Playing Minecraft here.")
+        self.cog._stream_values.assert_awaited_once_with(1)
+
     async def test_shoutout_uses_canonical_url_and_shared_cooldown(self):
         self.cog._lookup_twitch = AsyncMock(return_value={"id": "target", "login": "luna", "display_name": "Luna"})
         self.cog._send_twitch = AsyncMock()

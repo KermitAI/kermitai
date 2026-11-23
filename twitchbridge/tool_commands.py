@@ -151,15 +151,20 @@ class ToolCommandsMixin:
             name = tool_name(name)
             if not 0 <= value <= 1000000000:
                 raise ValueError("Choose 0-1000000000.")
+            keys, game, bid = await self._counter_context(ctx.guild.id, {name})
+            key = keys.get(name, name)
             async with self._tool_lock(ctx.guild.id):
                 group = self.config.guild(ctx.guild)
+                cfg = await group.all()
+                if cfg["broadcaster_id"] != bid or (name in cfg.get("game_counters", [])) != bool(keys):
+                    raise BridgeError("Counter settings changed; please try again.")
                 counters = await group.response_counters()
-                if name not in counters and len(counters) >= 1000:
+                if key not in counters and len(counters) >= 1000:
                     raise ValueError("This server already has 1000 counters.")
-                counters[name] = value
+                counters[key] = value
                 await group.response_counters.set(counters)
-            await ctx.send(f"Counter {name} set to {value}.")
-        except ValueError as exc:
+            await ctx.send(f"Counter {name}{' for ' + game if game else ''} set to {value}.", allowed_mentions=discord.AllowedMentions.none())
+        except (ValueError, BridgeError) as exc:
             await ctx.send(str(exc))
 
     @twitchcounter.command(name="set")
@@ -170,10 +175,34 @@ class ToolCommandsMixin:
     async def counter_reset(self, ctx, name: str):
         await self._counter_set(ctx, name, 0)
 
+    @twitchcounter.command(name="pergame")
+    async def counter_pergame(self, ctx, name: str, enabled: bool):
+        """Keep a separate total per Twitch game; existing global totals are preserved."""
+        try:
+            name = tool_name(name)
+            async with self._tool_lock(ctx.guild.id):
+                group = self.config.guild(ctx.guild)
+                cfg = await group.all()
+                names = set(cfg.get("game_counters", []))
+                if enabled:
+                    names.add(name)
+                else:
+                    names.discard(name)
+                await group.game_counters.set(sorted(names))
+            await ctx.send(f"Counter {name}: per-game tracking {'enabled' if enabled else 'disabled'}. Existing totals preserved.")
+        except ValueError as exc:
+            await ctx.send(str(exc))
+
     @twitchcounter.command(name="view")
     async def counter_view(self, ctx, name: str):
-        data = await self.config.guild(ctx.guild).response_counters()
-        await ctx.send(f"{name}: {data.get(name.lower(), 0)}")
+        try:
+            name = tool_name(name)
+            keys, game, bid = await self._counter_context(ctx.guild.id, {name})
+            data = await self.config.guild(ctx.guild).response_counters()
+            await ctx.send(f"{name}{' for ' + game if game else ''}: {data.get(keys.get(name, name), 0)}",
+                           allowed_mentions=discord.AllowedMentions.none())
+        except (ValueError, BridgeError) as exc:
+            await ctx.send(str(exc))
 
 
     @commands.is_owner()

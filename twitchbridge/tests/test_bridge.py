@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 def decorator(*args, **kwargs):
     def wrap(fn):
         fn.command = decorator
+        fn.group = decorator
         return fn
     return wrap
 
