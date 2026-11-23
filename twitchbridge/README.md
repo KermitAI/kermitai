@@ -1007,7 +1007,7 @@ remain literal text. Templates may contain up to 4000 characters; final chat
 messages still have the existing 500-character limit. There is no separate limit
 on the number of choices in a list within the template size. Keep each possible
 rendered reply within 500 characters. Use straight double quotes around responses.
-Expressions cannot be nested: selected replies and fetched content are literal
+Apart from the `{roll}` marker inside `randomreply`, expressions cannot be nested: selected replies and fetched content are literal
 text, never executed or interpreted as additional variables. Put common fields
 outside the expression, e.g. `{user}: {choose "Yes!" "No!"}`. Repeating the exact
 same expression in a message reuses its first result (one roll/lookup).
@@ -1110,3 +1110,15 @@ usual DST rules; nonexistent local times are rejected.
 ```
 .twitchcommand edit christmas Christmas is in {countdown dec 25 12:00:00 AM America/Toronto}!
 ```
+
+### Showing the weighted response roll
+
+Inside a quoted `randomreply` response, `{roll}` displays the same number that
+selected the response. It does not make a second independent roll. For example:
+```
+{randomreply 10 "{roll}% — You're a kitten 🐱" 60 "{roll}% — Not so dangerous." 90 "{roll}% — Oh, we got a badass over here!" 100 "{roll}% — You are Meruem"}
+```
+This rolls 1-100: kitten is always 1%-10%, not dangerous 11%-60%, badass 61%-90%,
+and Meruem 91%-100%. The bounds are inclusive. This is a 1-100 percentage scale,
+rather than the original JavaScript's 0-99 scale. `{roll}` is only interpreted
+inside a selected `randomreply` response; other nested variables are unsupported.

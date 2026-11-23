@@ -16,7 +16,10 @@ import aiohttp
 from .errors import BridgeError
 
 DYNAMIC_NAMES = {"countdown", "random", "randomreply", "choose", "urlfetch", "time", "weather", "followage"}
-DYNAMIC = re.compile(r"\{((?:countdown|random|randomreply|choose|urlfetch|time|weather)(?:\s+[^{}]*)?|followage)\}")
+# Only randomreply permits the nested {roll} marker; its result is still literal text.
+DYNAMIC = re.compile(
+    r"\{(randomreply(?:\s+(?:[^{}]|\{roll\})*)?|"
+    r"(?:countdown|random|choose|urlfetch|time|weather)(?:\s+[^{}]*)?|followage)\}")
 FIXED_ZONES = {"UTC": 0, "GMT": 0, "EST": -5, "EDT": -4, "CST": -6, "CDT": -5,
                "MST": -7, "MDT": -6, "PST": -8, "PDT": -7}
 
@@ -276,6 +279,7 @@ class ExtraVariablesMixin:
                 elif name == "randomreply":
                     roll = random.randint(1, int(args[-2]))
                     value = next(text for threshold, text in zip(args[::2], args[1::2]) if roll <= int(threshold))
+                    value = value.replace("{roll}", str(roll))
                 elif name == "urlfetch":
                     value = (await self._public_text(args[0]))[:500]
                 elif name == "weather":

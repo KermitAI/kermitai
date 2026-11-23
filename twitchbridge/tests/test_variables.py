@@ -115,6 +115,22 @@ class ExtendedVariablesTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(V['random'], 'randint', return_value=roll):
                 self.assertEqual(await self.render('{randomreply 10 "A" 80 "B" 100 "C"}'), reply)
 
+    async def test_weighted_response_percentages_match_each_selected_range(self):
+        template = '{randomreply 10 "{roll}% kitten" 60 "{roll}% not dangerous" 90 "{roll}% badass" 100 "{roll}% Meruem"}'
+        for number, reply in [(1, "kitten"), (10, "kitten"), (11, "not dangerous"),
+                              (60, "not dangerous"), (61, "badass"), (90, "badass"), (91, "Meruem"), (100, "Meruem")]:
+            with self.subTest(number=number), patch.object(V['random'], 'randint', return_value=number) as roll:
+                self.assertEqual(await self.render(template), f"{number}% {reply}")
+                roll.assert_called_once_with(1, 100)
+
+    async def test_roll_marker_is_supported_in_event_templates_without_reparsing_user_text(self):
+        template = '{randomreply 100 "{roll}% result"} {user}'
+        for kind in KINDS:
+            self.assertEqual(VALIDATE(kind, template), template)
+            with patch.object(V['random'], 'randint', return_value=42):
+                extended = await self.cog._extra_variables(1, template)
+            self.assertEqual(RENDER(kind, template, {'user_name': '{roll}', 'from_broadcaster_user_name': '{roll}'}, 'channel', extended=extended), '42% result {roll}')
+
     async def test_random_number_repeated_expression_is_one_roll(self):
         with patch.object(V['random'], 'randint', return_value=42) as roll:
             self.assertEqual(await self.render('{random 1 100} {random 1 100}'), '42 42')
