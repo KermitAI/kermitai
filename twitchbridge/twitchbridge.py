@@ -796,6 +796,34 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
             return
         await self._edit_command(ctx, name, "response", response)
 
+    async def _preview_custom_command(self, ctx, name, args, *, global_scope=False):
+        cfg = await self.config.guild(ctx.guild).all()
+        records = await self._global_records() if global_scope else cfg.get("custom_commands", {})
+        requested = name.lower().lstrip("!")
+        canonical, record = resolve_custom_command(records, requested)
+        if record is None:
+            await ctx.send("Global command not found." if global_scope else "Local custom command not found. Use twitchglobal preview for global commands.")
+            return
+        author = getattr(ctx, "author", None)
+        linked = cfg.get("member_links", {}).get(str(getattr(author, "id", "")), {})
+        try:
+            text = await self._render_shared(ctx.guild.id, record["response"],
+                user=getattr(author, "display_name", "ExampleViewer"), args=args, source=canonical,
+                twitch_id=linked.get("twitch_id"), login=linked.get("login"), preview=True)
+        except (BridgeError, ValueError) as exc:
+            await ctx.send("Preview failed: " + str(exc), allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
+            return
+        label = "global" if global_scope else "local"
+        if global_scope and resolve_custom_command(cfg.get("custom_commands", {}), requested)[1] is not None:
+            label += "; overridden here by a local command"
+        await ctx.send(f"Preview ({label}, {canonical}): {text}",
+                       allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
+
+    @twitchcommand.command(name="preview")
+    async def command_preview(self, ctx, name: str, *, args: str = ""):
+        """Preview a local command here without sending to Twitch or saving counters."""
+        await self._preview_custom_command(ctx, name, args)
+
     @twitchcommand.command(name="platform")
     async def command_platform(self, ctx, name: str, platform: str):
         """Choose twitch, discord, or both."""

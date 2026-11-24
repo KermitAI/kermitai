@@ -155,7 +155,7 @@ class ResponseToolsMixin(ExtraVariablesMixin):
             pass
         return "Unknown game"
 
-    async def _render_shared(self, guild_id, template, *, user="", args="", source="response", twitch_id=None, login=None, extra=None, truncate=False, target_identity=None):
+    async def _render_shared(self, guild_id, template, *, user="", args="", source="response", twitch_id=None, login=None, extra=None, truncate=False, target_identity=None, preview=False):
         values = {"user": user, "args": args, "target": target_mention(args), "url": "https://twitch.tv/" + login if login and re.fullmatch(r"[a-zA-Z0-9_]{1,25}", login) else "", "streak": 0}
         target = values["target"]
         values["targeturl"] = "https://twitch.tv/" + target[1:] if target else ""
@@ -186,7 +186,7 @@ class ResponseToolsMixin(ExtraVariablesMixin):
             if truncate:
                 text = " ".join(text.split())[:500]
             text = chat_text(text)
-            if updated != counters:
+            if updated != counters and not preview:
                 await group.response_counters.set(updated)
             return text
 

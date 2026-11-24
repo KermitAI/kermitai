@@ -1257,3 +1257,24 @@ use the global version:
 .twitchcommand remove octopus
 ```
 Import rejects any conflicting global name/alias without partially importing.
+
+### Preview custom and global commands
+
+The bot owner can preview messages in the current Discord channel:
+```
+.twitchcommand preview rps username
+.twitchglobal preview octopus
+```
+Syntax is `preview <command-or-alias> [arguments...]`. Local previews inspect the
+current server's local definition; global previews inspect the global definition
+using this server's linked broadcaster. A global preview warns when the requested
+name is overridden locally. The preview uses the invoking Discord display name
+for `{user}` and their linked Twitch identity for URL/follow-duration/streak fields.
+Arguments populate `{args}` and target variables just as in Twitch chat.
+
+Nothing is sent to Twitch. Command permissions/platform flags and active cooldowns
+do not prevent owner previews. Counter fields show the next value without saving
+it, and cooldowns remain unchanged. Random choices are rerolled and weather/URL/
+Twitch variables perform their normal reads, so live output may differ later.
+Per-game counters still require a live stream/category. Discord mentions and link
+embeds are disabled for preview messages.

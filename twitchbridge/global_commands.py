@@ -67,6 +67,11 @@ class GlobalCommandsMixin:
             return
         await self._global_setting(ctx, name, "response", response)
 
+    @twitchglobal.command(name="preview")
+    async def global_preview(self, ctx, name: str, *, args: str = ""):
+        """Preview the global definition using this server's linked stream context."""
+        await self._preview_custom_command(ctx, name, args, global_scope=True)
+
     @twitchglobal.command(name="permission")
     async def global_permission(self, ctx, name: str, permission: str):
         permission = permission.lower()
