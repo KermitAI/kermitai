@@ -282,6 +282,15 @@ class InteractiveFormatter(RedHelpFormatter):
         return discord.Embed(title=title or menu["title"], description=description,
                              colour=int(menu["colour"][1:], 16))
 
+    def apply_layout(self, embed, layout, *, page=None):
+        for field in layout.get("fields", []):
+            embed.add_field(name=field["name"], value=field["value"],
+                            inline=field.get("inline", False))
+        footer = layout.get("footer", "")
+        if footer or page:
+            embed.set_footer(text=" · ".join(part for part in (footer, page) if part))
+        return embed
+
     async def render(self, ctx, menu, page, *, private=False):
         kind, *args = page
         view = MenuView(self, ctx, private=private)
@@ -302,7 +311,8 @@ class InteractiveFormatter(RedHelpFormatter):
                 ], private=True)
             if ctx.guild:
                 view.button("Staff Help", ("staff",), row=2, private=True)
-            return self.embed(menu, description="\n".join(lines)), view
+            embed = self.embed(menu, description="\n".join(lines))
+            return self.apply_layout(embed, menu), view
 
         if kind == "staff":
             level = await self.level(ctx)
@@ -310,7 +320,10 @@ class InteractiveFormatter(RedHelpFormatter):
                 if level >= index:
                     view.button(GROUP_LABELS[index], ("group", index, 0), primary=True)
             if level:
-                return self.embed(menu, "Staff Help", "Choose a permission group."), view
+                layout = menu.get("staff_help", {})
+                embed = self.embed(menu, layout.get("title") or "Staff Help",
+                                   layout.get("intro", "Choose a permission group."))
+                return self.apply_layout(embed, layout), view
         elif kind == "details":
             name, back = args
             command = await self.find_command(ctx, name)
@@ -341,8 +354,12 @@ class InteractiveFormatter(RedHelpFormatter):
                     summary = summary.splitlines()[0] if summary else "View usage"
                     lines.append(f"**{discord.utils.escape_markdown(command.qualified_name)[:180]}**"
                                  f" · {summary[:130]}")
-                embed = self.embed(menu, title[:256], "\n".join(lines) or "No commands here.")
-                embed.set_footer(text=f"Page {index + 1} of {max_index + 1}")
+                layout = menu.get("staff_help", {}).get("groups", {}).get(GROUPS[level], {})
+                commands_text = "\n".join(lines) or "No commands here."
+                intro = layout.get("intro")
+                description = f"{intro}\n\n{commands_text}" if intro else commands_text
+                embed = self.embed(menu, layout.get("title") or title[:256], description)
+                self.apply_layout(embed, layout, page=f"Page {index + 1} of {max_index + 1}")
                 if current:
                     view.select("Command Details", [
                         (command.qualified_name, ("details", command.qualified_name,
@@ -656,8 +673,11 @@ class InteractiveHelp(commands.Cog):
         menu = self.draft(await self.settings())
         embed, _ = await self.formatter.render(ctx, menu, ("home",))
         pinned = [cat["label"] for cat in menu["categories"] if cat["pinned"]]
-        embed.add_field(name="Pinned categories", value=("\n".join(pinned) or "None"))
-        embed.set_footer(text="Global draft")
+        pinned_text = "\n".join(pinned) or "None"
+        if len(embed.fields) < 25 and len(embed) + len(pinned_text) + 30 <= 6000:
+            embed.add_field(name="Pinned categories", value=pinned_text)
+        if not embed.footer.text and len(embed) + len("Global draft") <= 6000:
+            embed.set_footer(text="Global draft")
         try:
             await ctx.author.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         except discord.Forbidden:
@@ -674,6 +694,15 @@ class InteractiveHelp(commands.Cog):
         state = await self.settings()
         data = state["published"] if source == "published" else self.draft(state)
         data = copy.deepcopy(data)
+        data.setdefault("fields", [])
+        data.setdefault("footer", "")
+        data.setdefault("staff_help", {
+            "title": "Staff Help",
+            "intro": "Choose a permission group.",
+            "fields": [],
+            "footer": "",
+            "groups": {},
+        })
         known = await self.formatter.known_commands(ctx)
         if "staff" not in data:
             staff = {group: set() for group in GROUPS[1:]}
