@@ -928,7 +928,7 @@ alias-add target is itself an alias. Names are case-insensitive and follow norma
 custom-command naming rules.
 
 Names already used by another custom command, alias, TwitchBridge built-in or
-currently registered Discord command are rejected. Future Discord command-name
+currently registered Discord command are rejected when the custom command is enabled in Discord. Twitch-only commands and aliases may share Discord command names. Future Discord command-name
 collisions still give precedence to the registered Discord command; choose unique
 names. No extra Twitch permission or authorization is needed.
 
@@ -1122,3 +1122,41 @@ This rolls 1-100: kitten is always 1%-10%, not dangerous 11%-60%, badass 61%-90%
 and Meruem 91%-100%. The bounds are inclusive. This is a 1-100 percentage scale,
 rather than the original JavaScript's 0-99 scale. `{roll}` is only interpreted
 inside a selected `randomreply` response; other nested variables are unsupported.
+
+### Platform-specific name conflicts
+
+New custom commands are Twitch-only, so their names may match commands from
+other Discord cogs. For example, `.twitchcommand add rps ...` works even when
+Discord already has an `rps` command. Twitch's reserved built-in names and names
+already used by another custom command/alias are still protected.
+
+Enabling `.twitchcommand platform rps discord` or `both` checks the original
+command name and every alias against registered Discord commands (including
+registered aliases). If any conflict, the entire platform change is declined
+and the previous setting stays unchanged. The reply lists the conflicting names.
+Aliases on Twitch-only commands follow the same rule: they may share Discord
+names, but then prevent enabling that command in Discord. For commands already
+enabled in Discord, adding a conflicting alias is declined. Registered Discord
+commands retain precedence if another cog is loaded later.
+
+### Public Twitch command list and permissions
+
+Viewers can use `!twitchcommands`, `!tcommands`, or `!tcmds` to list the original
+names of custom commands available to everyone on Twitch. Discord-only commands,
+moderator/broadcaster commands and alternate names are omitted. It reads the
+current settings each time, so adding/removing a command or changing permission
+or platform updates the list automatically. All three names share a 30-second
+per-channel cooldown. Long lists are split into messages of at most 500 characters.
+The configured Twitch prefix applies to these built-ins and the displayed names.
+
+The bot owner assigns custom command permissions in Discord:
+```
+.twitchcommand permission rps everyone
+.twitchcommand permission rant moderator
+```
+`everyone` allows all viewers; `moderator` allows Twitch moderators and the
+broadcaster. The existing `broadcaster` setting remains available. New commands
+default to `everyone`. Aliases share their original command's permission. On
+Discord-enabled commands, the existing Discord moderator/owner checks also apply.
+Permission configuration stays owner-only; this does not grant viewers command
+management access. The three command-list names are reserved Twitch built-ins.

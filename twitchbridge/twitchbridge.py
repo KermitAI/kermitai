@@ -10,7 +10,7 @@ import discord
 from redbot.core import Config, commands
 
 from .policy import (RecentMessages, log_line, login_name, reconnect_url, command_name,
-                     chat_text, template_text, render_response, parse_command, twitch_level, command_allowed, resolve_custom_command)
+                     chat_text, template_text, render_response, PUBLIC_COMMAND_LIST, public_command_pages, parse_command, twitch_level, command_allowed, resolve_custom_command)
 from .errors import BridgeError
 from .community import CommunityMixin, ROLE_SCOPES, DEFAULT_SHOUTOUT
 from .scopes import BOT_SCOPES, BROADCASTER_SCOPES
@@ -639,6 +639,20 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
             self.command_status = "Last Twitch message sent successfully"
             return results[0].get("message_id")
 
+    async def _public_command_list(self, guild_id, broadcaster_id):
+        async with self._command_lock(guild_id):
+            cfg = await self.config.guild_from_id(guild_id).all()
+            if not cfg["enabled"] or cfg["broadcaster_id"] != broadcaster_id:
+                return
+            key = (guild_id, "twitchcommands")
+            now = time.monotonic()
+            if now < self.cooldowns.get(key, 0):
+                return
+            self.cooldowns[key] = now + 30
+            pages = public_command_pages(cfg)
+        for page in pages:
+            await self._send_twitch(guild_id, page, expected_broadcaster=broadcaster_id)
+
     async def _command_loop(self):
         while True:
             guild_id, broadcaster_id, event = await self.command_queue.get()
@@ -646,6 +660,9 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
                 cfg = await self.config.guild_from_id(guild_id).all()
                 parsed = parse_command(event.get("message", {}).get("text", ""), cfg.get("command_prefix", "!"))
                 if not parsed:
+                    continue
+                if parsed[0] in PUBLIC_COMMAND_LIST:
+                    await self._public_command_list(guild_id, broadcaster_id)
                     continue
                 if parsed[0] == "link":
                     await self._complete_member_link(guild_id, broadcaster_id, event, parsed[1].strip())
@@ -729,9 +746,6 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
         except ValueError as exc:
             await ctx.send(str(exc))
             return
-        if self.bot.get_command(name):
-            await ctx.send("That name belongs to a registered Discord command; choose another name.")
-            return
         async with self._command_lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).custom_commands() as records:
                 if resolve_custom_command(records, name)[0] is not None:
@@ -755,6 +769,14 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
                 if record is None:
                     await ctx.send("Command not found.")
                     return
+                if field == "platform" and value in ("discord", "both"):
+                    conflicts = [candidate for candidate in [name, *record.get("aliases", [])]
+                                 if self.bot.get_command(candidate)]
+                    if conflicts:
+                        await ctx.send("Cannot enable this command in Discord: registered Discord commands already use "
+                                       + ", ".join(f"`{candidate}`" for candidate in conflicts)
+                                       + ". The current platform setting was kept. Use Twitch-only or remove conflicting aliases.")
+                        return
                 record[field] = value
         await ctx.send(f"Command `{name}` updated.")
 
@@ -849,14 +871,14 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
         except ValueError as exc:
             await ctx.send(str(exc))
             return
-        if self.bot.get_command(alias):
-            await ctx.send("That alias belongs to a registered Discord command; choose another name.")
-            return
         async with self._command_lock(ctx.guild.id):
             async with self.config.guild(ctx.guild).custom_commands() as records:
                 canonical, record = resolve_custom_command(records, name)
                 if record is None:
                     await ctx.send("Command not found. Create it with twitchcommand add first.")
+                    return
+                if record.get("platform", "twitch") in ("discord", "both") and self.bot.get_command(alias):
+                    await ctx.send("That alias belongs to a registered Discord command. Choose another alias or set this command to Twitch-only first.")
                     return
                 if resolve_custom_command(records, alias)[0] is not None:
                     await ctx.send("That name is already a command or alias.")
