@@ -192,6 +192,34 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text, "Follow Luna at https://twitch.tv/luna! Playing Minecraft here.")
         self.cog._stream_values.assert_awaited_once_with(1)
 
+    async def test_shoutout_supports_target_variables_and_reuses_verified_identity(self):
+        self.cfg["shoutout_message"] = "Follow {target}: {targetgame} / {usergame} at {targeturl}"
+        self.cog._lookup_twitch = AsyncMock(return_value={"id": "target-id", "login": "luna", "display_name": "Luna"})
+        self.cog._token = AsyncMock(return_value=("client", {"access_token": "token"}))
+        self.cog._request = AsyncMock(return_value=(200, {"data": [{"game_name": "Stardew Valley"}]}))
+        self.cog._send_twitch = AsyncMock()
+        text = await self.cog._shoutout(1, "@luna")
+        self.assertEqual(text, "Follow @luna: Stardew Valley / Stardew Valley at https://twitch.tv/luna")
+        self.cog._lookup_twitch.assert_awaited_once_with("@luna")
+        self.assertEqual(self.cog._request.await_count, 1)
+        self.assertEqual(self.cog._request.call_args.kwargs["params"], {"broadcaster_id": "target-id"})
+
+    async def test_shoutout_uses_shared_counters_and_response_choices(self):
+        self.cfg.update(response_counters={}, shoutout_cooldown=0,
+            shoutout_message='{choose "Follow"} {target}! {counter} {counter:promos} {args} {url}')
+        self.cog._lookup_twitch = AsyncMock(return_value={"id": "target", "login": "luna", "display_name": "Luna"})
+        self.cog._send_twitch = AsyncMock()
+        self.assertEqual(await self.cog._shoutout(1, "luna"), "Follow @luna! 1 1 luna https://twitch.tv/luna")
+        self.assertEqual(await self.cog._shoutout(1, "luna"), "Follow @luna! 2 2 luna https://twitch.tv/luna")
+        self.assertEqual(self.cfg["response_counters"], {"shoutout": 2, "promos": 2})
+
+    async def test_shoutout_template_accepts_targeturl_but_requires_a_link(self):
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        await self.cog.shoutout_message(ctx, message="Follow {target} at {targeturl}")
+        self.assertEqual(self.cfg["shoutout_message"], "Follow {target} at {targeturl}")
+        await self.cog.shoutout_message(ctx, message="Follow {target}")
+        self.assertEqual(self.cfg["shoutout_message"], "Follow {target} at {targeturl}")
+
     async def test_shoutout_uses_canonical_url_and_shared_cooldown(self):
         self.cog._lookup_twitch = AsyncMock(return_value={"id": "target", "login": "luna", "display_name": "Luna"})
         self.cog._send_twitch = AsyncMock()

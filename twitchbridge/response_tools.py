@@ -140,9 +140,30 @@ class ResponseToolsMixin(ExtraVariablesMixin):
         keys = {name: f"game:{bid}:{stream['game_id']}:{name}" for name in scoped}
         return keys, stream.get("game_name", stream["game_id"]), bid
 
-    async def _render_shared(self, guild_id, template, *, user="", args="", source="response", twitch_id=None, login=None, extra=None, truncate=False):
+    async def _target_game(self, target, identity=None):
+        if not target:
+            return "Unknown game"
+        try:
+            identity = identity or await self._lookup_twitch(target)
+            client_id, auth = await self._token()
+            code, body = await self._request("GET", API + "channels",
+                params={"broadcaster_id": identity["id"]},
+                headers={"Client-Id": client_id, "Authorization": "Bearer " + auth["access_token"]})
+            if code == 200 and body.get("data"):
+                return body["data"][0].get("game_name") or "Unknown game"
+        except (BridgeError, ValueError, KeyError, TypeError):
+            pass
+        return "Unknown game"
+
+    async def _render_shared(self, guild_id, template, *, user="", args="", source="response", twitch_id=None, login=None, extra=None, truncate=False, target_identity=None):
         values = {"user": user, "args": args, "target": target_mention(args), "url": "https://twitch.tv/" + login if login and re.fullmatch(r"[a-zA-Z0-9_]{1,25}", login) else "", "streak": 0}
+        target = values["target"]
+        values["targeturl"] = "https://twitch.tv/" + target[1:] if target else ""
         requested = set(VARIABLE.findall(template))
+        if "targetgame" in requested or (target_identity and "usergame" in requested):
+            values["targetgame"] = await self._target_game(target, identity=target_identity)
+            if target_identity:
+                values["usergame"] = values["targetgame"]
         if requested & STREAM_FIELDS:
             values.update(await self._stream_values(guild_id))
         extended = await self._extra_variables(guild_id, template, twitch_id=twitch_id)

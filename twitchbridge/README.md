@@ -1160,3 +1160,38 @@ default to `everyone`. Aliases share their original command's permission. On
 Discord-enabled commands, the existing Discord moderator/owner checks also apply.
 Permission configuration stays owner-only; this does not grant viewers command
 management access. The three command-list names are reserved Twitch built-ins.
+
+### Target account game and channel URL
+
+Custom command responses can use `{targetgame}` and `{targeturl}` alongside
+`{target}`. They use the first argument, accepting `username` or `@username`.
+`{targetgame}` looks up that account's currently configured Twitch category,
+including when offline; it is not guaranteed stream-history data. Failed or
+missing account/category lookups return `Unknown game`. `{targeturl}` constructs
+an HTTPS Twitch channel link without the `@`; missing/invalid arguments produce
+an empty URL. The game lookup only runs when requested. `{game}` continues to
+mean the linked broadcaster's category.
+
+```
+.twitchcommand add follow Be sure to follow {target}! They were recently playing {targetgame} at {targeturl}
+```
+
+### Shared variables in built-in shoutouts
+
+`shoutoutmessage` now uses the same renderer as custom commands. `{user}` is the
+shouted-out display name, `{url}` is their channel URL, and `{args}` is their
+canonical login. `{target}` mentions that account; `{targeturl}` is its channel
+URL and `{targetgame}` its currently configured category. `{usergame}` is also
+accepted here as an alias for `{targetgame}`. `{game}`, `{title}`, `{uptime}` and
+`{viewers}` continue to describe the linked broadcaster's stream.
+
+Shared random/choice, countdown, local-time, weather, URL-fetch, streak,
+follow-duration and counter variables work too. Follow duration and streak use
+the shouted-out Twitch account. Plain `{counter}` uses the `shoutout` counter;
+named counters retain their normal behavior. A template must contain `{url}` or
+`{targeturl}`. Normal moderator permissions, cooldowns and routing checks apply.
+
+```
+.twitchset shoutoutmessage Be sure to follow {target}! They were recently playing {targetgame} at {targeturl}
+```
+Use `!so username`, `!shoutout username`, or `.twitchshoutout username` as before.

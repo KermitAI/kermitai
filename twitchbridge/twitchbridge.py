@@ -998,8 +998,8 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
         """Set follow-message text with {user}, {url}, and optionally {channel}."""
         try:
             message = template_text(message)
-            if "{url}" not in message:
-                raise ValueError("Include {url} so the shoutout contains the Twitch link.")
+            if "{url}" not in message and "{targeturl}" not in message:
+                raise ValueError("Include {url} or {targeturl} so the shoutout contains the Twitch link.")
         except ValueError as exc:
             await ctx.send(str(exc))
             return

@@ -97,6 +97,25 @@ class StreamToolsTests(unittest.IsolatedAsyncioTestCase):
             await self.cog._render_shared(1, "{counter:deaths}")
         self.assertEqual(before, self.cfg["response_counters"])
 
+    async def test_target_game_and_url_use_target_account_and_keep_broadcaster_game(self):
+        self.cog._lookup_twitch = AsyncMock(return_value={"id": "target-id"})
+        self.cog._token = AsyncMock(return_value=("client", {"access_token": "token"}))
+        self.cog._request = AsyncMock(return_value=(200, {"data": [{"game_name": "Stardew Valley"}]}))
+        self.cog._stream_values = AsyncMock(return_value={"game": "Minecraft"})
+        for args in ("friend", "@friend"):
+            text = await self.cog._render_shared(1, "{target}|{targeturl}|{targetgame}|{game}", args=args)
+            self.assertEqual(text, "@friend|https://twitch.tv/friend|Stardew Valley|Minecraft")
+            self.assertEqual(self.cog._request.call_args.kwargs["params"], {"broadcaster_id": "target-id"})
+
+    async def test_target_lookup_is_optional_and_failed_game_has_fallback(self):
+        self.cog._lookup_twitch = AsyncMock(side_effect=module.BridgeError("Unavailable"))
+        self.assertEqual(await self.cog._render_shared(1, "{targeturl}", args="friend"), "https://twitch.tv/friend")
+        self.cog._lookup_twitch.assert_not_awaited()
+        self.assertEqual(await self.cog._render_shared(1, "{targetgame}", args="friend"), "Unknown game")
+        self.cog._lookup_twitch.reset_mock()
+        self.assertEqual(await self.cog._render_shared(1, "Game: {targetgame}; URL: {targeturl}", args=""), "Game: Unknown game; URL:")
+        self.cog._lookup_twitch.assert_not_awaited()
+
     async def test_target_formats_bare_and_tagged_first_argument_and_preserves_args(self):
         for args, expected in [("Some_User", "@Some_User"), ("@Some_User", "@Some_User"),
                                ("Some_User extra text", "@Some_User"), ("", ""),
