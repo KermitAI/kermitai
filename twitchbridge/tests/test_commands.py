@@ -168,6 +168,17 @@ class CommandPolicyTests(unittest.TestCase):
                 policy.chat_text(value)
         self.assertEqual(policy.chat_text("hello\nworld"), "hello world")
 
+    def test_lead_moderator_is_mod_level_but_not_broadcaster(self):
+        event = {"chatter_user_id": "mod-user", "broadcaster_user_id": "stream",
+                 "badges": [{"set_id": "lead_moderator", "id": "1", "info": ""}]}
+        level = policy.twitch_level(event)
+        self.assertEqual(level, 1)
+        self.assertTrue(policy.command_allowed({"platform": "twitch", "permission": "moderator"}, "twitch", level))
+        self.assertFalse(policy.command_allowed({"platform": "twitch", "permission": "broadcaster"}, "twitch", level))
+        for badge in ("vip", "subscriber", "staff"):
+            event["badges"] = [{"set_id": badge}]
+            self.assertEqual(policy.twitch_level(event), 0)
+
     def test_twitch_badges_map_to_permissions(self):
         self.assertEqual(policy.twitch_level({"chatter_user_id": "1", "broadcaster_user_id": "1"}), 2)
         self.assertEqual(policy.twitch_level({"chatter_user_id": "2", "broadcaster_user_id": "1",

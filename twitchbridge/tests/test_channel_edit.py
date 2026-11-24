@@ -31,6 +31,27 @@ class ChannelEditTests(unittest.IsolatedAsyncioTestCase):
         self.cog._role_token = AsyncMock(return_value=("client", {"access_token": "broadcaster-token", "user_id": "stream"}))
         self.cog._request.return_value = (204, {})
 
+    async def test_chat_dispatch_accepts_regular_and_lead_moderators_for_title_updates(self):
+        import asyncio
+        self.cog.command_queue = asyncio.Queue()
+        self.cog._send_twitch = AsyncMock()
+        for badge in ("moderator", "lead_moderator"):
+            event = {"chatter_user_id": "mod-user", "broadcaster_user_id": "stream",
+                     "badges": [{"set_id": badge, "id": "1", "info": ""}],
+                     "message": {"text": "!title Updated by " + badge}}
+            self.cog.command_queue.put_nowait((1, "stream", event))
+        task = asyncio.create_task(self.cog._command_loop())
+        await asyncio.wait_for(self.cog.command_queue.join(), 1)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual(self.cog._request.await_count, 2)
+        for call, badge in zip(self.cog._request.call_args_list, ("moderator", "lead_moderator")):
+            self.assertEqual(call.args[0], "PATCH")
+            self.assertEqual(call.kwargs["json"], {"title": "Updated by " + badge})
+            self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer broadcaster-token")
+        for call in self.cog._send_twitch.call_args_list:
+            self.assertTrue(call.args[1].startswith("Stream title updated:"))
+
     async def test_regular_viewers_cannot_change_any_field(self):
         for field in ("title", "game", "category", "tags", "language"):
             with self.assertRaises(module.BridgeError):

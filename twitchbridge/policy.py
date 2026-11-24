@@ -98,7 +98,7 @@ def parse_command(text, prefix):
 def twitch_level(event):
     if event.get("chatter_user_id") and event.get("chatter_user_id") == event.get("broadcaster_user_id"):
         return 2
-    return 1 if any(badge.get("set_id") == "moderator" for badge in event.get("badges", [])) else 0
+    return 1 if any(badge.get("set_id") in {"moderator", "lead_moderator"} for badge in event.get("badges", [])) else 0
 
 
 def command_allowed(record, platform, level):

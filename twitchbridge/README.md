@@ -1374,3 +1374,12 @@ are rejected without creating/replacing a timer. Edits use the existing schedule
 refresh: pending stale automation messages are invalidated and timer intervals
 restart. `view` shows the full saved message and settings without executing any
 variables. Existing enabled/liveonly/list/remove commands are unchanged.
+
+### Lead Moderator badge compatibility
+
+Twitch moderator checks recognize both `moderator` and `lead_moderator` badges.
+Twitch replaces the regular moderator badge when a Lead Moderator displays the
+Lead Moderator badge. Both have moderator access in Paimon; broadcaster-only
+settings remain broadcaster-only. This applies to stream metadata updates,
+shoutouts, to-dos, ads, quotes and restricted custom/global commands. No new OAuth
+scope is needed for this badge-recognition fix.
