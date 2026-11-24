@@ -34,12 +34,29 @@ def check_keys(value, required, optional=()):
         raise ValueError("Unrecognized fields in the menu.")
 
 
+def validate_layout(layout, label, *, reserved=0, footer_limit=2048):
+    fields = layout.get("fields", [])
+    if not isinstance(fields, list) or len(fields) > 25:
+        raise ValueError(f"{label} fields must be a list of up to 25 entries.")
+    total = reserved
+    total += len(string(layout.get("title", ""), f"{label} title", 100, empty=True))
+    total += len(string(layout.get("intro", ""), f"{label} intro", 700, empty=True))
+    total += len(string(layout.get("footer", ""), f"{label} footer", footer_limit, empty=True))
+    for index, field in enumerate(fields, 1):
+        check_keys(field, ("name", "value"), ("inline",))
+        total += len(string(field["name"], f"{label} field {index} name", 256))
+        total += len(string(field["value"], f"{label} field {index} value", 1024))
+        if type(field.get("inline", False)) is not bool:
+            raise ValueError(f"{label} field {index} inline must be true or false.")
+    if total > 6000:
+        raise ValueError(f"{label} exceeds the embed character budget. Shorten its fields or footer.")
+
+
 def validate(menu):
-    check_keys(menu, DEFAULT, ("staff",))
+    check_keys(menu, DEFAULT, ("staff", "fields", "footer", "staff_help"))
     if type(menu["version"]) is not int or menu["version"] != 1:
         raise ValueError("Only menu version 1 is supported.")
     string(menu["title"], "Title", 100)
-    string(menu["intro"], "Intro", 700, empty=True)
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", string(menu["colour"], "Colour", 7)):
         raise ValueError("Use a hex colour such as #21664F.")
     categories = menu["categories"]
@@ -65,6 +82,23 @@ def validate(menu):
                 string(entry, field, 150)
     if pinned > 4:
         raise ValueError("Pin up to four categories.")
+    pinned_text = sum(
+        len(category["label"]) + len(category["description"]) + 8
+        for category in categories if category["pinned"] and category.get("description")
+    )
+    validate_layout(menu, "Home", reserved=pinned_text)
+    if "staff_help" in menu:
+        layout = menu["staff_help"]
+        keys = ("title", "intro", "fields", "footer")
+        check_keys(layout, (), (*keys, "groups"))
+        validate_layout(layout, "Staff Help", reserved=40)
+        groups = layout.get("groups", {})
+        check_keys(groups, (), GROUPS[1:])
+        for group, group_layout in groups.items():
+            check_keys(group_layout, (), keys)
+            # Reserve room for eight generated command summaries and the page counter.
+            validate_layout(group_layout, group, reserved=2600, footer_limit=2000)
+
     overrides = menu["overrides"]
     if not isinstance(overrides, dict):
         raise ValueError("Overrides must be an object keyed by full command name.")
