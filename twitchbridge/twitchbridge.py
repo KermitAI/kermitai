@@ -18,6 +18,7 @@ from .events import ChannelEventsMixin, EVENT_DEFAULTS
 from .stream_tools import StreamToolsMixin, FIRST_DEFAULTS, STREAK_DEFAULTS
 from .ads import AD_DEFAULTS
 from .channel_edit import ChannelEditMixin, CHANNEL_COMMANDS
+from .global_commands import GlobalCommandsMixin
 
 BASE = "https://api.twitch.tv/helix/"
 AUTH = "https://id.twitch.tv/oauth2/"
@@ -25,13 +26,13 @@ SOCKET = "wss://eventsub.wss.twitch.tv/ws"
 SCOPES = " ".join(sorted(BOT_SCOPES))
 
 
-class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, CommunityMixin, commands.Cog):
+class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, CommunityMixin, commands.Cog):
     """Connect Twitch broadcasters to Discord servers (bot owner only)."""
 
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420016, force_registration=True)
-        self.config.register_global(bot_auth={})
+        self.config.register_global(bot_auth={}, global_commands={})
         self.config.register_guild(broadcaster="", broadcaster_id="", broadcaster_auth={},
                                    chatlog=None, enabled=False, custom_commands={},
                                    announcements=None, command_prefix="!", announcement_color="primary",
@@ -565,10 +566,15 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
             cfg = await self.config.guild_from_id(guild_id).all()
             if not cfg["enabled"] or (broadcaster_id is not None and cfg["broadcaster_id"] != broadcaster_id):
                 return None
+            requested_name = name
             name, record = resolve_custom_command(cfg.get("custom_commands", {}), name)
+            scope = "local"
+            if record is None and platform == "twitch":
+                name, record = resolve_custom_command(await self._global_records(), requested_name)
+                scope = "global"
             if not record or not command_allowed(record, platform, level):
                 return None
-            key = (guild_id, name)
+            key = (guild_id, "global:" + name if scope == "global" else name)
             now = time.monotonic()
             if now < self.cooldowns.get(key, 0):
                 return None
@@ -649,7 +655,7 @@ class TwitchBridge(ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, Commu
             if now < self.cooldowns.get(key, 0):
                 return
             self.cooldowns[key] = now + 30
-            pages = public_command_pages(cfg)
+            pages = public_command_pages(cfg, await self._global_records())
         for page in pages:
             await self._send_twitch(guild_id, page, expected_broadcaster=broadcaster_id)
 

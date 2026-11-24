@@ -4,7 +4,7 @@ import types
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from test_bridge import module, policy
+from test_bridge import module, policy, Field
 import test_commands as fixtures
 import test_community as state
 
@@ -29,7 +29,7 @@ class AliasTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         fixtures.CommandTests.setUp(self)
         self.group = ConfigGroup(self.cfg)
-        self.cog.config = types.SimpleNamespace(guild=lambda guild: self.group, guild_from_id=lambda gid: self.group)
+        self.cog.config = types.SimpleNamespace(guild=lambda guild: self.group, guild_from_id=lambda gid: self.group, global_commands=Field({}))
         self.cog.bot = types.SimpleNamespace(get_command=Mock(return_value=None))
         self.ctx = types.SimpleNamespace(guild=types.SimpleNamespace(id=1), send=AsyncMock())
 

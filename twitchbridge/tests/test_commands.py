@@ -4,7 +4,7 @@ import types
 import unittest
 from unittest.mock import AsyncMock
 
-from test_bridge import module, policy
+from test_bridge import module, policy, Field
 
 
 class Settings:
@@ -23,7 +23,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
                     "custom_commands": {"hello": {"response": "Hello {user}! {args} on {channel}",
                        "platform": "both", "permission": "everyone", "cooldown": 5}}}
         self.group = Settings(self.cfg)
-        self.cog.config = types.SimpleNamespace(guild_from_id=lambda gid: self.group, guild=lambda guild: self.group)
+        self.cog.config = types.SimpleNamespace(guild_from_id=lambda gid: self.group, guild=lambda guild: self.group, global_commands=Field({}))
         self.cog.command_locks = {}
         self.cog.cooldowns = {}
         self.cog.send_lock = asyncio.Lock()

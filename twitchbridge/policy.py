@@ -54,7 +54,7 @@ def log_line(event, timestamp):
 
 PUBLIC_COMMAND_LIST = {"twitchcommands", "tcommands", "tcmds"}
 
-RESERVED_COMMANDS = PUBLIC_COMMAND_LIST | {"twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout", "todo", "ads", "streak", "twitchtodo", "twitchads", "twitchtimer", "twitchtrigger", "twitchcounter", "twitchfirst", "twitchstreak", "tstream", "title", "game", "category", "tags", "language"}
+RESERVED_COMMANDS = PUBLIC_COMMAND_LIST | {"twitchglobal","twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout", "todo", "ads", "streak", "twitchtodo", "twitchads", "twitchtimer", "twitchtrigger", "twitchcounter", "twitchfirst", "twitchstreak", "tstream", "title", "game", "category", "tags", "language"}
 
 
 def command_name(value):
@@ -135,10 +135,14 @@ def resolve_custom_command(records, name):
     return None, None
 
 
-def public_command_pages(cfg):
+def public_command_pages(cfg, global_records=None):
     """Only advertise public custom commands usable on this Twitch channel."""
     prefix = cfg.get("command_prefix", "!")
-    names = [prefix + name for name, record in sorted(cfg.get("custom_commands", {}).items())
+    local = cfg.get("custom_commands", {})
+    effective = {name: record for name, record in (global_records or {}).items()
+                 if resolve_custom_command(local, name)[1] is None}
+    effective.update(local)
+    names = [prefix + name for name, record in sorted(effective.items())
              if record.get("permission") == "everyone" and record.get("platform") in ("twitch", "both")]
     if not names:
         return ["No public custom Twitch commands are configured yet."]

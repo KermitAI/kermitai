@@ -1206,3 +1206,54 @@ Example output: `For me it is currently clear skies, 7.5°C (Open-Meteo)`.
 Without `hidecity`, the existing city label remains. Both modes use the same
 five-minute cache. The configured location still exists in the saved template
 and is sent to the weather provider; this option hides it in rendered chat replies.
+
+### Global Twitch command library
+
+The bot owner can configure a command once for every enabled linked Twitch stream:
+```
+.twitchglobal add octopus {choose "They have three hearts" "Their blood is blue."}
+.twitchglobal edit octopus {choose "They have three hearts" "They taste with their arms."}
+.twitchglobal permission octopus everyone
+.twitchglobal cooldown octopus 10
+.twitchglobal alias add octopus octofact
+.twitchglobal alias list
+.twitchglobal alias remove octofact
+.twitchglobal list
+.twitchglobal remove octopus
+```
+The global library is Twitch-only and does not register Discord chat commands, so
+it may use names already registered by Discord cogs. Reserved Twitch built-ins
+remain protected. Defaults are everyone permission and a five-second cooldown.
+It supports the existing response variables, 4000-character templates, up to
+250 command definitions and ten aliases per command. Permissions can be everyone,
+moderator or broadcaster. Adding/editing/removing is restricted to the bot owner
+from Discord; viewers invoke the commands using that stream's configured prefix.
+
+Each invocation uses its own broadcaster's stream data and target/chatter context.
+Cooldowns and counters are per linked stream; aliases share their original
+command's cooldown and counter. Named counters use the stream's existing counter
+storage, so matching counter names can intentionally share a total within that
+stream. Command definitions persist globally in Red Config and apply immediately
+to current streams and streams linked later, with no cog reload or per-stream setup.
+
+Local custom command names and aliases take precedence over a matching global
+name. A restricted or Discord-only local definition also blocks the matching
+Twitch global name; it never falls back to a global command to bypass permission
+or platform restrictions. The public `!twitchcommands` / `!tcommands` / `!tcmds`
+list includes effective global and local public Twitch commands without duplicates.
+Use `.twitchglobal list` to inspect all global definitions; `.twitchcommand list`
+continues to show the current server's local definitions.
+
+To copy an existing local command (including response, aliases, permission and
+cooldown) into the global library:
+```
+.twitchglobal import octopus
+```
+This leaves the local definition untouched and forces the global copy to
+Twitch-only. The local copy still wins in its original stream. After reviewing
+the global copy, remove the local definition there if you want that stream to
+use the global version:
+```
+.twitchcommand remove octopus
+```
+Import rejects any conflicting global name/alias without partially importing.
