@@ -1314,3 +1314,43 @@ broadcaster token; Twitch eligibility and ad/snooze limits still apply.
 Other public built-ins (`!twitchcommands`, aliases, account linking and streak
 viewing) remain available to everyone. Existing custom/global command-specific
 permission settings are preserved.
+
+### Twitch quotes posted to Discord
+
+Discord bot owners, guild owners, administrators and moderators can configure
+quote submissions for the linked Twitch broadcaster:
+```
+.twitchquote channel #quotes
+.twitchquote permission everyone
+.twitchquote mode embed
+.twitchquote color purple
+.twitchquote cooldown 10
+.twitchquote enabled true
+.twitchquote status
+```
+Twitch viewers then submit using `!quote <text>` (or the configured prefix).
+Permission options are `everyone`, `moderator` (mods and broadcaster), or
+`broadcaster`. Defaults are disabled, moderator permission, embed mode, blurple
+color, and a 10-second shared per-channel cooldown. Settings are per linked server.
+
+Use `.twitchquote mode message` for plain chat; `chat` also works as an alias for
+message mode. Both formats include `Submitted by @twitch_username | YYYY-MM-DD
+HH:MM:SS UTC`: an embed footer in embed mode, or a separate footer line for plain
+messages. Colors affect embeds only. Named colors: blue, green, red, purple,
+orange, yellow, gold, pink, white, black and blurple. Six-digit hex values are
+accepted, e.g. `.twitchquote color #5865F2`.
+
+Quote text is literal, up to 500 characters; it does not expand command variables.
+Discord mentions are disabled, and plain-message link previews are suppressed.
+Paimon needs View Channel and Send Messages in the destination, plus Embed Links
+for embed mode. Only text channels in the linked Discord server are accepted.
+Posting is blocked when the bridge/cog is disabled, the broadcaster changes, or
+the destination becomes unavailable. A successful submission receives a Twitch
+confirmation; denied/failed submissions receive an explanation. The cooldown is
+only consumed after Discord accepts the post. Use `.twitchquote enabled false`
+to pause submissions. `quote` and `twitchquote` are now reserved built-in names.
+
+Quote channel/settings are stored in Red Config. Submitted quote content,
+submitter username and UTC date/time persist in the configured Discord channel;
+this feature does not maintain a separate local quote database or delete those
+Discord posts on account unlinking.

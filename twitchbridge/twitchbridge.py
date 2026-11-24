@@ -20,6 +20,7 @@ from .stream_tools import StreamToolsMixin, FIRST_DEFAULTS, STREAK_DEFAULTS
 from .ads import AD_DEFAULTS
 from .channel_edit import ChannelEditMixin, CHANNEL_COMMANDS
 from .global_commands import GlobalCommandsMixin
+from .quotes import QuotesMixin, QUOTE_DEFAULTS
 
 BASE = "https://api.twitch.tv/helix/"
 AUTH = "https://id.twitch.tv/oauth2/"
@@ -27,7 +28,7 @@ SOCKET = "wss://eventsub.wss.twitch.tv/ws"
 SCOPES = " ".join(sorted(BOT_SCOPES))
 
 
-class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, CommunityMixin, commands.Cog):
+class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, CommunityMixin, commands.Cog):
     """Connect Twitch broadcasters to Discord servers (bot owner only)."""
 
     def __init__(self, bot):
@@ -42,7 +43,7 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
                                    link_panel={}, link_panel_label="Link Twitch account",
                                    link_panel_text="Link your Twitch account to receive your server roles.",
                                    channel_events=copy.deepcopy(EVENT_DEFAULTS), automation_revision=0,
-                                   timers={}, chat_triggers={}, response_counters={}, game_counters=[], todo_items=[], todo_permission="moderator",
+                                   quote_settings=copy.deepcopy(QUOTE_DEFAULTS), timers={}, chat_triggers={}, response_counters={}, game_counters=[], todo_items=[], todo_permission="moderator",
                                    ad_settings=copy.deepcopy(AD_DEFAULTS), ad_notices={}, ad_warning_pause_until=0,
                                    first_message=copy.deepcopy(FIRST_DEFAULTS), streak_settings=copy.deepcopy(STREAK_DEFAULTS),
                                    stream_session={}, viewer_data={})
@@ -670,6 +671,16 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
                     continue
                 if parsed[0] in PUBLIC_COMMAND_LIST:
                     await self._public_command_list(guild_id, broadcaster_id)
+                    continue
+                if parsed[0] == "quote":
+                    try:
+                        if not parsed[1].strip():
+                            text = "Use " + cfg.get("command_prefix", "!") + "quote <text>."
+                        else:
+                            text = await self._post_quote(guild_id, broadcaster_id, event, parsed[1])
+                    except (BridgeError, ValueError) as exc:
+                        text = str(exc)
+                    await self._send_twitch(guild_id, text, expected_broadcaster=broadcaster_id)
                     continue
                 if parsed[0] == "link":
                     await self._complete_member_link(guild_id, broadcaster_id, event, parsed[1].strip())

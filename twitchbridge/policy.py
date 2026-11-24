@@ -54,7 +54,7 @@ def log_line(event, timestamp):
 
 PUBLIC_COMMAND_LIST = {"twitchcommands", "tcommands", "tcmds"}
 
-RESERVED_COMMANDS = PUBLIC_COMMAND_LIST | {"twitchglobal","twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout", "todo", "ads", "streak", "twitchtodo", "twitchads", "twitchtimer", "twitchtrigger", "twitchcounter", "twitchfirst", "twitchstreak", "tstream", "title", "game", "category", "tags", "language"}
+RESERVED_COMMANDS = PUBLIC_COMMAND_LIST | {"quote", "twitchquote","twitchglobal","twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout", "todo", "ads", "streak", "twitchtodo", "twitchads", "twitchtimer", "twitchtrigger", "twitchcounter", "twitchfirst", "twitchstreak", "tstream", "title", "game", "category", "tags", "language"}
 
 
 def command_name(value):

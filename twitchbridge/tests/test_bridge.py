@@ -40,6 +40,13 @@ class TextChannel:
         pass
 
 
+class Embed:
+    def __init__(self, *, description, color):
+        self.description, self.color = description, color
+    def set_footer(self, *, text):
+        self.footer = types.SimpleNamespace(text=text)
+
+
 class UIItem:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -68,7 +75,7 @@ pkg.__path__ = [str(root)]
 commands = types.SimpleNamespace(check=check, Cog=type("Cog", (), {"listener": staticmethod(decorator)}), is_owner=owner_check, guild_only=decorator, group=decorator, command=decorator, mod_or_permissions=decorator)
 modules = {
     "bridge_test_package": pkg,
-    "discord": types.SimpleNamespace(TextChannel=TextChannel, Role=object, HTTPException=HTTPException, NotFound=type("NotFound", (HTTPException,), {}),
+    "discord": types.SimpleNamespace(TextChannel=TextChannel, Embed=Embed, Role=object, HTTPException=HTTPException, NotFound=type("NotFound", (HTTPException,), {}),
                                      utils=types.SimpleNamespace(escape_markdown=lambda text: text),
                                      ui=types.SimpleNamespace(View=UIView, Modal=UIView, Button=UIItem, TextInput=UIItem),
                                      ButtonStyle=types.SimpleNamespace(primary=1),
