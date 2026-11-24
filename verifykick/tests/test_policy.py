@@ -81,6 +81,38 @@ class EligibilityTests(unittest.TestCase):
                 self.assertTrue(policy.is_due(self.member, [99], seconds, self.start, deadline))
 
 
+class InstantPolicyTests(EligibilityTests):
+    def setUp(self):
+        super().setUp()
+        self.guild.me.id = 123
+
+    def test_instant_includes_bots_and_ignores_age(self):
+        self.member.bot = True
+        self.member.joined_at = None
+        self.assertTrue(policy.can_instant_kick(self.member, [99, 100]))
+
+    def test_instant_any_role_exempts(self):
+        for rid in (99, 100):
+            self.member.roles = [NS(id=rid)]
+            self.assertFalse(policy.can_instant_kick(self.member, [99, 100]))
+        self.assertFalse(policy.can_instant_kick(self.member, []))
+
+    def test_instant_moderation_exemptions(self):
+        self.member.id = self.guild.me.id
+        self.assertFalse(policy.can_instant_kick(self.member, [99]))
+        self.member.id = self.guild.owner_id
+        self.assertFalse(policy.can_instant_kick(self.member, [99]))
+        self.member.id = 2
+        self.member.guild_permissions.administrator = True
+        self.assertFalse(policy.can_instant_kick(self.member, [99]))
+        self.member.guild_permissions.administrator = False
+        self.member.top_role = self.guild.me.top_role
+        self.assertFalse(policy.can_instant_kick(self.member, [99]))
+        self.member.top_role = 2
+        self.guild.me.guild_permissions.kick_members = False
+        self.assertFalse(policy.can_instant_kick(self.member, [99]))
+
+
 class DurationTests(unittest.TestCase):
     def test_units_and_limits(self):
         for value, expected in (("3m", 180), ("1h", 3600), ("5d", 432000),

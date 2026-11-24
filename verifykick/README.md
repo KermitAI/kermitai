@@ -71,3 +71,37 @@ Failed notices are not retried. Members are not sent DMs.
 
 `preview` counts currently eligible members without kicking them; it does not pause
 the automatic checker. No member-specific data is stored.
+
+
+## Instant channel kicks
+
+Use this independent rule to kick members as soon as they post in a specified
+text channel without any exempt role. There is no waiting period or join-age
+requirement. Configure roles first, then activate the channel:
+
+```text
+[p]verifykickset instant roles @Member @Verified
+[p]verifykickset instant channel #verification-trap
+[p]verifykickset settings
+```
+
+Having ANY listed exempt role prevents a kick. The list is separate from the
+timed verification roles. `instant roles` replaces the entire list and deactivates
+the channel rule; set `instant channel` again to reactivate it.
+
+`[p]verifykickset instant disable` stops this rule. The normal `enable` and
+`disable` commands affect only timed kicks. Both rules start disabled on a new
+installation; existing timed settings are unchanged by this update.
+
+The bot needs Kick Members, View Channel, the guild message intent, and a higher
+role than the accounts it should kick. This rule reacts to new messages in the
+exact configured text channel, including attachment-only posts. It does not scan
+old messages or include threads. Message content is not inspected. Bot accounts
+are eligible too; the bot itself, webhooks, the server owner, administrators, and
+members at or above the bot's highest role are excluded. Any deleted exempt role
+pauses the rule until the list is configured again.
+
+Roles are refreshed before kicking. Enforcement happens when Discord delivers the
+message, subject to network latency and rate limits. Messages are not deleted.
+Successful kicks include an audit-log reason and, if configured with
+`verifykickset channel`, a notification. Failed kicks and notices are logged.

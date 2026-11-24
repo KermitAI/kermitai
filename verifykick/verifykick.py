@@ -6,7 +6,7 @@ import discord
 from discord.ext import tasks
 from redbot.core import Config, commands
 
-from .policy import format_duration, is_due, parse_duration, waiting_seconds, required_role_ids
+from .policy import format_duration, is_due, parse_duration, waiting_seconds, required_role_ids, can_instant_kick
 
 log = logging.getLogger("red.verifykick")
 
@@ -18,8 +18,10 @@ class VerifyKick(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=827419620501, force_registration=True)
         self.config.register_guild(enabled=False, role_id=None, role_ids=None, days=7, time_seconds=None,
-                                   channel_id=None, enabled_at=None)
+                                   channel_id=None, enabled_at=None,
+                                   instant_channel_id=None, instant_role_ids=[])
         self._locks = {}
+        self._instant_locks = {}
         self.check_members.start()
 
     def cog_unload(self):
@@ -30,6 +32,49 @@ class VerifyKick(commands.Cog):
 
     def _lock(self, guild):
         return self._locks.setdefault(guild.id, asyncio.Lock())
+
+    def _instant_lock(self, guild):
+        return self._instant_locks.setdefault(guild.id, asyncio.Lock())
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        guild = message.guild
+        if (guild is None or message.webhook_id is not None
+                or message.author.id == self.bot.user.id):
+            return
+        # Separate lock: an ongoing timed scan must not delay message enforcement.
+        async with self._instant_lock(guild):
+            settings = await self.config.guild(guild).all()
+            role_ids = settings["instant_role_ids"]
+            if (message.channel.id != settings["instant_channel_id"] or not role_ids
+                    or any(guild.get_role(rid) is None for rid in role_ids)
+                    or await self.bot.cog_disabled_in_guild(self, guild)):
+                return
+            try:
+                member = await guild.fetch_member(message.author.id)
+                if (any(guild.get_role(rid) is None for rid in role_ids)
+                        or not can_instant_kick(member, role_ids)):
+                    return
+                await member.kick(reason=(
+                    f"VerifyKick: posted in restricted channel {message.channel.id} "
+                    "without an exempt role"))
+            except discord.NotFound:
+                return
+            except discord.HTTPException:
+                log.warning("Instant kick failed in guild %s for member %s",
+                            guild.id, message.author.id, exc_info=True)
+                return
+            channel = guild.get_channel(settings["channel_id"]) if settings["channel_id"] else None
+            if channel is not None:
+                try:
+                    await channel.send(
+                        f"{discord.utils.escape_markdown(str(member))} (ID: {member.id}) "
+                        f"was kicked for posting in <#{message.channel.id}> "
+                        "without any exempt role.",
+                        allowed_mentions=discord.AllowedMentions.none())
+                except discord.HTTPException:
+                    log.warning("Instant kick succeeded but notification failed in guild %s",
+                                guild.id, exc_info=True)
 
     @tasks.loop(seconds=30)
     async def check_members(self):
@@ -95,6 +140,47 @@ class VerifyKick(commands.Cog):
     async def verifykickset(self, ctx):
         """Configure automatic kicks for members missing a required role."""
         await ctx.send_help()
+
+    @verifykickset.group(name="instant", invoke_without_command=True)
+    async def instant(self, ctx):
+        """Configure the independent instant channel kick rule."""
+        await ctx.send_help()
+
+    @instant.command(name="roles")
+    async def instant_roles(self, ctx, *roles: discord.Role):
+        """Replace exempt roles; ANY listed role prevents an instant kick."""
+        if not roles or any(role.is_default() for role in roles):
+            await ctx.send("Specify one or more exempt roles other than @everyone.")
+            return
+        async with self._instant_lock(ctx.guild):
+            async with self.config.guild(ctx.guild).all() as settings:
+                settings["instant_role_ids"] = list(dict.fromkeys(role.id for role in roles))
+                settings["instant_channel_id"] = None
+        await ctx.send("Instant exempt roles saved. Set instant channel to activate the rule.")
+
+    @instant.command(name="channel")
+    @commands.bot_has_permissions(kick_members=True)
+    async def instant_channel(self, ctx, channel: discord.TextChannel):
+        """Activate instant kicks in this channel, independently of timed kicks."""
+        if not self.bot.intents.guild_messages or not channel.permissions_for(ctx.guild.me).view_channel:
+            await ctx.send("I need the guild message intent and View Channel in that channel.")
+            return
+        async with self._instant_lock(ctx.guild):
+            settings = await self.config.guild(ctx.guild).all()
+            role_ids = settings["instant_role_ids"]
+            if not role_ids or any(ctx.guild.get_role(rid) is None for rid in role_ids):
+                await ctx.send("Set valid exempt roles first with verifykickset instant roles.")
+                return
+            await self.config.guild(ctx.guild).instant_channel_id.set(channel.id)
+        await ctx.send("Instant channel kicks activated. Anyone posting there without an exempt "
+                       "role will be kicked immediately, subject to permissions and hierarchy.")
+
+    @instant.command(name="disable")
+    async def instant_disable(self, ctx):
+        """Disable instant channel kicks without changing timed kicks."""
+        async with self._instant_lock(ctx.guild):
+            await self.config.guild(ctx.guild).instant_channel_id.set(None)
+        await ctx.send("Instant channel kicks disabled.")
 
     @verifykickset.command(name="roles", aliases=["role"])
     async def set_roles(self, ctx, *roles: discord.Role):
@@ -176,10 +262,10 @@ class VerifyKick(commands.Cog):
 
     @verifykickset.command(name="disable")
     async def disable(self, ctx):
-        """Stop automatic kicks."""
+        """Stop timed kicks. Use instant disable to stop channel kicks."""
         async with self._lock(ctx.guild):
             await self.config.guild(ctx.guild).enabled.set(False)
-        await ctx.send("Automatic kicks disabled.")
+        await ctx.send("Timed kicks disabled. Instant channel kicks are configured separately.")
 
     @verifykickset.command(name="settings")
     async def show_settings(self, ctx):
@@ -194,7 +280,9 @@ class VerifyKick(commands.Cog):
             f"{', '.join(role_labels) if role_labels else 'Not set'}\n"
             f"Waiting period: {format_duration(waiting_seconds(settings))}\n"
             f"Notifications: {channel.mention if channel else 'Off or channel deleted'}\n"
-            "Checks: every 30 seconds",
+            "Checks: every 30 seconds\n"
+            f"Instant channel: {settings['instant_channel_id'] or 'Off'}\n"
+            f"Instant exempt roles (any one): {', '.join(str(rid) for rid in settings['instant_role_ids']) or 'Not set'}",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 

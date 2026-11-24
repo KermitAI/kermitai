@@ -47,3 +47,16 @@ def is_due(member, role_ids, seconds, enabled_at, now):
     if member.top_role >= me.top_role:
         return False
     return now >= max(member.joined_at, enabled_at) + timedelta(seconds=seconds)
+
+
+def can_instant_kick(member, role_ids):
+    """Instant rules include bot accounts but preserve moderation exemptions."""
+    if not role_ids or member.id == member.guild.owner_id:
+        return False
+    if member.guild_permissions.administrator:
+        return False
+    if any(role.id in role_ids for role in member.roles):
+        return False
+    me = member.guild.me
+    return (me is not None and member.id != me.id
+            and me.guild_permissions.kick_members and member.top_role < me.top_role)
