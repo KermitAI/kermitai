@@ -79,8 +79,10 @@ def parse_variable(body):
         zone(args[0])
     if name == "urlfetch":
         public_url(args[0])
-    if name == "weather" and (not args or len(" ".join(args)) > 150):
-        raise ValueError("Use {weather Helsinki/Finland}.")
+    if name == "weather":
+        location_args = args[:-1] if args and args[-1].lower() == "hidecity" else args
+        if not location_args or len(" ".join(location_args)) > 150:
+            raise ValueError("Use {weather Helsinki/Finland}, optionally followed by hidecity.")
     if name == "countdown":
         countdown_target(args)
     if name == "followage" and args:
@@ -206,14 +208,14 @@ class ExtraVariablesMixin:
         # Each template has a bounded number of lookups and each read is bounded.
         return await public_get(url)
 
-    async def _weather(self, location):
+    async def _weather(self, location, show_location=True):
         cache = getattr(self, "weather_cache", None)
         if cache is None:
             self.weather_cache = cache = {}
         key = location.casefold()
         cached = cache.get(key)
         if cached and time.monotonic() - cached[0] < 300:
-            return cached[1]
+            return cached[1] if show_location else cached[2]
         city, _, country = location.partition("/")
         search = city.strip() + (", " + country.strip() if country else "")
         tokens = await self.bot.get_shared_api_tokens("openmeteo")
@@ -233,11 +235,12 @@ class ExtraVariablesMixin:
             query["apikey"] = api_key
         body = json.loads(await self._public_text("https://" + prefix + "api.open-meteo.com/v1/forecast?" + urlencode(query)))
         current = body["current"]
-        result = f"{place['name']}: {weather_description(current['weather_code'])}, {current['temperature_2m']:g}°C (Open-Meteo)"
-        cache[key] = (time.monotonic(), result)
+        brief = f"{weather_description(current['weather_code'])}, {current['temperature_2m']:g}°C (Open-Meteo)"
+        result = f"{place['name']}: {brief}"
+        cache[key] = (time.monotonic(), result, brief)
         if len(cache) > 256:
             cache.pop(next(iter(cache)))
-        return result
+        return result if show_location else brief
 
     async def _followage(self, guild_id, twitch_id):
         if not twitch_id:
@@ -283,7 +286,8 @@ class ExtraVariablesMixin:
                 elif name == "urlfetch":
                     value = (await self._public_text(args[0]))[:500]
                 elif name == "weather":
-                    value = await self._weather(" ".join(args))
+                    hidden = args[-1].lower() == "hidecity"
+                    value = await self._weather(" ".join(args[:-1] if hidden else args), show_location=not hidden)
                 else:
                     value = await self._followage(guild_id, twitch_id)
             except (BridgeError, aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError, KeyError, TypeError, AttributeError):

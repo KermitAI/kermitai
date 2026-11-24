@@ -178,6 +178,17 @@ class ExtendedVariablesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.render('{weather Helsinki/Finland}'), text)
         self.assertEqual(self.cog._public_text.await_count, 2)
 
+    async def test_weather_can_hide_city_without_leaking_cached_location(self):
+        self.cog.bot = types.SimpleNamespace(get_shared_api_tokens=AsyncMock(return_value={}))
+        self.cog._public_text = AsyncMock(side_effect=[
+            '{"results":[{"name":"Tallinn","latitude":59.44,"longitude":24.75}]}',
+            '{"current":{"weather_code":0,"temperature_2m":7.5}}'])
+        self.assertEqual(await self.render('{weather Tallinn/Estonia}'), 'Tallinn: clear skies, 7.5°C (Open-Meteo)')
+        self.assertEqual(await self.render('{weather Tallinn/Estonia hidecity}'), 'clear skies, 7.5°C (Open-Meteo)')
+        self.assertEqual(self.cog._public_text.await_count, 2)
+        with self.assertRaises(ValueError):
+            V['parse_variable']('weather hidecity')
+
     async def test_timezone_is_location_aware_and_countdown_past_is_zero(self):
         text = await self.render('{time Europe/Helsinki}')
         self.assertRegex(text, r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (EET|EEST)')

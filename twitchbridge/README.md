@@ -1195,3 +1195,14 @@ named counters retain their normal behavior. A template must contain `{url}` or
 .twitchset shoutoutmessage Be sure to follow {target}! They were recently playing {targetgame} at {targeturl}
 ```
 Use `!so username`, `!shoutout username`, or `.twitchshoutout username` as before.
+
+### Hide location names in weather replies
+
+Add `hidecity` after the location to omit its name from the response:
+```
+.twitchcommand edit weather For me it is currently {weather Tallinn/Estonia hidecity}
+```
+Example output: `For me it is currently clear skies, 7.5°C (Open-Meteo)`.
+Without `hidecity`, the existing city label remains. Both modes use the same
+five-minute cache. The configured location still exists in the saved template
+and is sent to the weather provider; this option hides it in rendered chat replies.
