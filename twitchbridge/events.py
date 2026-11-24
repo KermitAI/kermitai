@@ -10,6 +10,7 @@ import discord
 from redbot.core import commands
 
 from .errors import BridgeError
+from .permissions import staff_only
 from .variables import mask_extended
 from .policy import RecentMessages, reconnect_url
 
@@ -333,7 +334,7 @@ class ChannelEventsMixin:
             await group.channel_events.set(settings)
         self.events_wakeup.set()
 
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     @commands.group(name="twitchevents", invoke_without_command=True)
     async def twitchevents(self, ctx):

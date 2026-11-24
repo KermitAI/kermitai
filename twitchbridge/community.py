@@ -8,6 +8,7 @@ import discord
 from redbot.core import commands
 
 from .errors import BridgeError
+from .permissions import staff_only, admin_only
 from .linking import LinkingMixin, LinkPanelView
 from .policy import parse_command, twitch_target, shoutout_text, chat_text, twitch_level
 
@@ -331,7 +332,7 @@ class CommunityMixin(LinkingMixin):
             except asyncio.TimeoutError:
                 pass
 
-    @commands.is_owner()
+    @admin_only()
     @commands.guild_only()
     @commands.group(name="twitchroles", invoke_without_command=True)
     async def twitchroles(self, ctx):
@@ -424,7 +425,7 @@ class CommunityMixin(LinkingMixin):
         await self._send_twitch(guild_id, text, expected_broadcaster=broadcaster_id)
         return text
 
-    @commands.mod_or_permissions(manage_guild=True)
+    @staff_only()
     @commands.guild_only()
     @commands.command(name="twitchshoutout")
     async def twitchshoutout(self, ctx, target: str):

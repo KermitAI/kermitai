@@ -16,6 +16,21 @@ def decorator(*args, **kwargs):
     return wrap
 
 
+def check(predicate):
+    def decorate(fn):
+        fn.__bridge_checks__ = [*getattr(fn, "__bridge_checks__", []), predicate]
+        return fn
+    return decorate
+
+
+def owner_check():
+    async def predicate(ctx):
+        return await ctx.bot.is_owner(ctx.author)
+    def decorate(fn):
+        return check(predicate)(decorator()(fn))
+    return decorate
+
+
 class HTTPException(Exception):
     pass
 
@@ -50,7 +65,7 @@ class UIView:
 root = Path(__file__).parents[1]
 pkg = types.ModuleType("bridge_test_package")
 pkg.__path__ = [str(root)]
-commands = types.SimpleNamespace(Cog=type("Cog", (), {"listener": staticmethod(decorator)}), is_owner=decorator, guild_only=decorator, group=decorator, command=decorator, mod_or_permissions=decorator)
+commands = types.SimpleNamespace(check=check, Cog=type("Cog", (), {"listener": staticmethod(decorator)}), is_owner=owner_check, guild_only=decorator, group=decorator, command=decorator, mod_or_permissions=decorator)
 modules = {
     "bridge_test_package": pkg,
     "discord": types.SimpleNamespace(TextChannel=TextChannel, Role=object, HTTPException=HTTPException, NotFound=type("NotFound", (HTTPException,), {}),

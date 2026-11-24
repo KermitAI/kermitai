@@ -1278,3 +1278,39 @@ it, and cooldowns remain unchanged. Random choices are rerolled and weather/URL/
 Twitch variables perform their normal reads, so live output may differ later.
 Per-game counters still require a live stream/category. Discord mentions and link
 embeds are disabled for preview messages.
+
+### Current Discord and Twitch access policy
+
+The following policy supersedes older owner-only and public-read descriptions
+above. Discord Moderator/Administrator access includes Red-configured mod/admin
+roles; Discord's Administrator permission also qualifies. Manage Server alone
+no longer grants these staff commands.
+
+| Discord command/group | Allowed users |
+| --- | --- |
+| `twitchset`, `twitchglobal` | Bot owner only |
+| `twitchroles` | Bot owner, guild owner, administrators |
+| `twitchlink` | Everyone in the server |
+| `twitchcommand`, `twitchannounce`, `twitchshoutout`, `twitchtimer`, `twitchtrigger`, `twitchcounter`, `twitchevents`, `twitchads`, `twitchfirst`, `twitchstreak`, `twitchtodo`, `tstream` | Bot owner, guild owner, administrators, moderators |
+
+These checks also apply to grouped subcommands. `twitchcommand` alias management
+and preview are available to staff. `twitchglobal` management and preview remain
+bot-owner-only. Broadcaster linking, bot authentication and connection settings
+remain bot-owner-only even though staff can configure stream features.
+
+`.todo` is a registered alias for `.twitchtodo`; either bare group shows the list.
+`.todo add <text>`, `.todo view`, and `.todo del <number>` use the same per-server
+list as Twitch's `!todo` commands. If another cog already owns the Discord `todo`
+name, that command is preserved and TwitchBridge still loads with `.twitchtodo`.
+The existing fallback path also checks staff access. Legacy to-do `everyone`
+settings cannot bypass the moderator access floor; an explicitly selected
+broadcaster-only editing policy can still make edits stricter.
+
+Twitch moderator/broadcaster access is required for the full commands `!so`,
+`!shoutout`, `!todo`, `!ads`, `!title`, `!game`, `!category`, `!tags`, and `!language`.
+This includes read-only views, `!ads status`, `!todo view`, and metadata queries
+with no arguments. Moderators can run and snooze ads through the already approved
+broadcaster token; Twitch eligibility and ad/snooze limits still apply.
+Other public built-ins (`!twitchcommands`, aliases, account linking and streak
+viewing) remain available to everyone. Existing custom/global command-specific
+permission settings are preserved.

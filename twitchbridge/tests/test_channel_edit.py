@@ -48,9 +48,9 @@ class ChannelEditTests(unittest.IsolatedAsyncioTestCase):
         self.cog._role_token.assert_awaited_once_with(1, {"channel:manage:broadcast"})
         self.assertNotIn(1, self.cog.stream_cache)
 
-    async def test_viewer_can_read_current_title_without_write_permission(self):
+    async def test_moderator_can_read_current_title_without_write_permission(self):
         self.cog._request.return_value = (200, {"data": [{"title": "Current Title"}]})
-        self.assertEqual(await self.cog._channel_action(1, "title", "", 0), "Stream title: Current Title")
+        self.assertEqual(await self.cog._channel_action(1, "title", "", 1), "Stream title: Current Title")
         self.cog._role_token.assert_not_awaited()
         self.assertEqual(self.cog._request.call_args.args[0], "GET")
 

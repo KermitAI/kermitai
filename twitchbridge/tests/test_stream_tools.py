@@ -139,9 +139,9 @@ class StreamToolsTests(unittest.IsolatedAsyncioTestCase):
             await self.cog._todo_action(1, "add", "No", 0)
         await self.cog._todo_action(1, "add", "First", 1)
         await self.cog._todo_action(1, "add", "Second", 2)
-        self.assertEqual(await self.cog._todo_action(1, "view", "", 0), ["1. First", "2. Second"])
+        self.assertEqual(await self.cog._todo_action(1, "view", "", 1), ["1. First", "2. Second"])
         await self.cog._todo_action(1, "del", "1", 1)
-        self.assertEqual(await self.cog._todo_action(1, "view", "", 0), ["1. Second"])
+        self.assertEqual(await self.cog._todo_action(1, "view", "", 1), ["1. Second"])
         with self.assertRaises(ValueError):
             await self.cog._todo_action(1, "del", "0", 1)
 

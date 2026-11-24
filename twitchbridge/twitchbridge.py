@@ -12,6 +12,7 @@ from redbot.core import Config, commands
 from .policy import (RecentMessages, log_line, login_name, reconnect_url, command_name,
                      chat_text, template_text, render_response, PUBLIC_COMMAND_LIST, public_command_pages, parse_command, twitch_level, command_allowed, resolve_custom_command)
 from .errors import BridgeError
+from .permissions import staff_only
 from .community import CommunityMixin, ROLE_SCOPES, DEFAULT_SHOUTOUT
 from .scopes import BOT_SCOPES, BROADCASTER_SCOPES
 from .events import ChannelEventsMixin, EVENT_DEFAULTS
@@ -723,10 +724,7 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
             parts = parsed[1].split(maxsplit=1)
             await self._todo_reply(ctx, parts[0].lower() if parts else "view", parts[1] if len(parts) > 1 else "")
             return
-        owner = await self.bot.is_owner(message.author)
-        level = 2 if owner or message.author.id == message.guild.owner_id else 0
-        if level == 0 and (message.author.guild_permissions.manage_guild or await self.bot.is_mod(message.author)):
-            level = 1
+        level = await self._discord_level(ctx)
         try:
             cfg = await self.config.guild(message.guild).all()
             linked = cfg.get("member_links", {}).get(str(message.author.id), {})
@@ -737,11 +735,11 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
         except (BridgeError, ValueError, discord.HTTPException) as exc:
             self.command_status = str(exc) if isinstance(exc, (BridgeError, ValueError)) else "Discord command reply failed"
 
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     @commands.group(name="twitchcommand", invoke_without_command=True)
     async def twitchcommand(self, ctx):
-        """Manage this server's standalone shared commands (bot owner only)."""
+        """Manage this server's standalone shared commands (server staff)."""
         await ctx.send_help()
 
     @twitchcommand.command(name="add")
@@ -889,14 +887,14 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
         await self._send_command_lines(ctx, lines or ["No custom commands configured."])
 
     @twitchcommand.group(name="alias", invoke_without_command=True)
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     async def command_alias(self, ctx):
         """Manage alternate names for custom commands."""
         await ctx.send_help()
 
     @command_alias.command(name="add")
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     async def alias_add(self, ctx, name: str, alias: str):
         """Add an alias: twitchcommand alias add <existing-command> <alias>."""
@@ -925,7 +923,7 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
         await ctx.send(f"Alias `{alias}` added for `{canonical}`.")
 
     @command_alias.command(name="remove", aliases=["delete"])
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     async def alias_remove(self, ctx, alias: str):
         """Remove an alternate name while preserving the original command."""
@@ -943,7 +941,7 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
         await ctx.send(reply)
 
     @command_alias.command(name="list")
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     async def alias_list(self, ctx, name: str = ""):
         """List aliases for one command, or for all commands in this server."""
@@ -981,7 +979,7 @@ class TwitchBridge(GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, Chan
         await self._restart()
         await ctx.send("Twitch command prefix updated.")
 
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     @commands.command(name="twitchannounce")
     async def twitchannounce(self, ctx, destination: str, *, message: str):

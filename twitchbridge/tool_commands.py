@@ -2,17 +2,22 @@
 import discord
 from redbot.core import commands
 from .errors import BridgeError
+from .permissions import staff_only, discord_access
 from .policy import template_text
 from .response_tools import tool_name
 
 
 class ToolCommandsMixin:
     @commands.guild_only()
-    @commands.group(name="twitchtodo", invoke_without_command=True)
+    @staff_only()
+    @commands.group(name="twitchtodo", aliases=["todo"], invoke_without_command=True)
     async def twitchtodo(self, ctx):
-        await ctx.send_help()
+        await self._todo_reply(ctx, "view", "")
 
     async def _todo_reply(self, ctx, action, text):
+        if not await discord_access(self.bot, ctx.guild, ctx.author):
+            await ctx.send("Only server owners, administrators and moderators can use the to-do list.")
+            return
         try:
             lines = await self._todo_action(ctx.guild.id, action, text, await self._discord_level(ctx))
             for i in range(0, len(lines), 5):
@@ -33,7 +38,7 @@ class ToolCommandsMixin:
         await self._todo_reply(ctx, "del", str(number))
 
     @twitchtodo.command(name="permission")
-    @commands.is_owner()
+    @staff_only()
     async def todo_permission(self, ctx, permission: str):
         if permission not in ("everyone", "moderator", "broadcaster"):
             await ctx.send("Choose everyone, moderator, or broadcaster.")
@@ -57,7 +62,7 @@ class ToolCommandsMixin:
         await self._edit_tools(ctx.guild, field, lambda data: data.pop(name.lower(), None))
         await ctx.send("Entry removed.")
 
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     @commands.group(name="twitchtimer", invoke_without_command=True)
     async def twitchtimer(self, ctx):
@@ -96,7 +101,7 @@ class ToolCommandsMixin:
         for line in [f"{name}: {item['seconds']}s | enabled={item['enabled']} | live_only={item['live_only']}" for name, item in sorted(data.items())] or ["No timers configured."]:
             await ctx.send(line)
 
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     @commands.group(name="twitchtrigger", invoke_without_command=True)
     async def twitchtrigger(self, ctx):
@@ -140,7 +145,7 @@ class ToolCommandsMixin:
         if not data:
             await ctx.send("No triggers configured.")
 
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     @commands.group(name="twitchcounter", invoke_without_command=True)
     async def twitchcounter(self, ctx):
@@ -205,7 +210,7 @@ class ToolCommandsMixin:
             await ctx.send(str(exc))
 
 
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     @commands.group(name="twitchads", invoke_without_command=True)
     async def twitchads(self, ctx):
@@ -268,7 +273,7 @@ class ToolCommandsMixin:
         except BridgeError as exc:
             await ctx.send(str(exc))
 
-    @commands.is_owner()
+    @staff_only()
     @commands.guild_only()
     @commands.group(name="twitchfirst", invoke_without_command=True)
     async def twitchfirst(self, ctx):
@@ -320,18 +325,19 @@ class ToolCommandsMixin:
             await ctx.send(str(exc))
 
     @commands.guild_only()
+    @staff_only()
     @commands.group(name="twitchstreak", invoke_without_command=True)
     async def twitchstreak(self, ctx):
         await ctx.send_help()
 
     @twitchstreak.command(name="enabled")
-    @commands.is_owner()
+    @staff_only()
     async def streak_enabled(self, ctx, enabled: bool):
         await self._edit_tools(ctx.guild, "streak_settings", lambda data: data.update(enabled=enabled))
         await ctx.send("Stream streak tracking enabled." if enabled else "Stream streak tracking disabled.")
 
     @twitchstreak.command(name="breakonmiss")
-    @commands.is_owner()
+    @staff_only()
     async def streak_break(self, ctx, enabled: bool):
         await self._edit_tools(ctx.guild, "streak_settings", lambda data: data.update(break_on_miss=enabled))
         await ctx.send("Missed-stream streak policy saved.")
@@ -360,12 +366,12 @@ class ToolCommandsMixin:
             await ctx.send(str(exc))
 
     @twitchstreak.command(name="set")
-    @commands.is_owner()
+    @staff_only()
     async def streak_set(self, ctx, username: str, value: int):
         await self._set_streak(ctx, username, value)
 
     @twitchstreak.command(name="add")
-    @commands.is_owner()
+    @staff_only()
     async def streak_add(self, ctx, username: str, value: int):
         await self._set_streak(ctx, username, value, add=True)
 
@@ -380,7 +386,7 @@ class ToolCommandsMixin:
             await ctx.send(str(exc))
 
     @twitchstreak.command(name="forget")
-    @commands.is_owner()
+    @staff_only()
     async def streak_forget(self, ctx, username: str):
         try:
             identity = await self._lookup_twitch(username)

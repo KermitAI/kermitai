@@ -12,4 +12,7 @@ __red_end_user_data_statement__ = (
 
 
 async def setup(bot):
-    await bot.add_cog(TwitchBridge(bot))
+    cog = TwitchBridge(bot)
+    if bot.get_command("todo") is not None:
+        cog.twitchtodo.aliases = [name for name in cog.twitchtodo.aliases if name != "todo"]
+    await bot.add_cog(cog)

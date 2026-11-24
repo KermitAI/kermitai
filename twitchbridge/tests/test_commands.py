@@ -107,7 +107,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         channel = types.SimpleNamespace(send=AsyncMock())
         message = types.SimpleNamespace(author=author, guild=guild, channel=channel, content=".hello testing")
         self.cog.bot = types.SimpleNamespace(cog_disabled_in_guild=AsyncMock(return_value=False),
-            message_eligible_as_command=AsyncMock(return_value=True), get_context=AsyncMock(return_value=types.SimpleNamespace(valid=False)),
+            message_eligible_as_command=AsyncMock(return_value=True), get_context=AsyncMock(return_value=types.SimpleNamespace(valid=False, author=author, guild=guild)),
             get_valid_prefixes=AsyncMock(return_value=["."]), is_owner=AsyncMock(return_value=False), is_mod=AsyncMock(return_value=False))
         await self.cog.on_message(message)
         self.assertEqual(channel.send.call_args.args[0], "Hello DiscordViewer! testing on streamer")

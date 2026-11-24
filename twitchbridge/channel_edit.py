@@ -5,6 +5,7 @@ import discord
 from redbot.core import commands
 
 from .errors import BridgeError
+from .permissions import staff_only
 
 API = "https://api.twitch.tv/helix/"
 CHANNEL_COMMANDS = {"title", "game", "category", "tags", "language"}
@@ -87,6 +88,8 @@ class ChannelEditMixin:
         if not cfg["enabled"] or not bid or (expected is not None and bid != expected):
             raise BridgeError("The Twitch connection is paused or the broadcaster changed.")
         field = "category" if field == "game" else field
+        if level < 1:
+            raise BridgeError("Only moderators and the broadcaster can use stream information commands.")
         if not value.strip():
             channel = await self._read_channel(guild_id, expected=bid)
             if field == "title":
@@ -117,7 +120,7 @@ class ChannelEditMixin:
         await self._update_channel(guild_id, fields, expected=bid, level=level)
         return reply
 
-    @commands.mod_or_permissions(manage_guild=True)
+    @staff_only()
     @commands.guild_only()
     @commands.group(name="tstream", invoke_without_command=True)
     async def tstream(self, ctx):

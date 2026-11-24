@@ -6,6 +6,7 @@ import discord
 
 from .ads import AdsMixin, AD_DEFAULTS
 from .errors import BridgeError
+from .permissions import discord_access
 from .response_tools import ResponseToolsMixin, word_matches
 from .policy import parse_command, twitch_level, chat_text
 from .tool_commands import ToolCommandsMixin
@@ -198,8 +199,10 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
         async with self._tool_lock(gid):
             group = self.config.guild_from_id(gid)
             cfg = await group.all()
-            needed = {"everyone": 0, "moderator": 1, "broadcaster": 2}[cfg.get("todo_permission", "moderator")]
+            needed = {"everyone": 1, "moderator": 1, "broadcaster": 2}[cfg.get("todo_permission", "moderator")]
             items = cfg.get("todo_items", [])
+            if level < 1:
+                raise BridgeError("Only moderators and the broadcaster can use the to-do list.")
             if action == "view":
                 return [f"{i}. {item}" for i, item in enumerate(items, 1)] or ["The to-do list is empty."]
             if level < needed:
@@ -226,7 +229,7 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
     async def _discord_level(self, ctx):
         if await self.bot.is_owner(ctx.author) or ctx.author.id == ctx.guild.owner_id:
             return 2
-        return 1 if ctx.author.guild_permissions.manage_guild or await self.bot.is_mod(ctx.author) else 0
+        return 1 if await discord_access(self.bot, ctx.guild, ctx.author) else 0
 
     async def _tool_twitch_command(self, gid, bid, event, name, args):
         if name not in ("todo", "ads", "streak"):
@@ -235,6 +238,8 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
         if not cfg["enabled"] or cfg["broadcaster_id"] != bid:
             return True
         level = twitch_level(event)
+        if name in ("todo", "ads") and level < 1:
+            raise BridgeError("Only moderators and the broadcaster can use this command.")
         if name == "todo":
             parts = args.split(maxsplit=1)
             lines = await self._todo_action(gid, parts[0].lower() if parts else "view", parts[1] if len(parts) > 1 else "", level)
@@ -246,8 +251,6 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
             parts = args.split(maxsplit=1)
             action = parts[0].lower() if parts else "status"
             if action in ("run", "snooze"):
-                if level < 2:
-                    raise BridgeError("Only the broadcaster can run or snooze ads from Twitch chat.")
                 lines = [await self._ad_action(gid, action, int(parts[1]) if len(parts) > 1 else 60, expected=bid)]
             else:
                 schedule = await self._refresh_ads(gid, expected=bid)
