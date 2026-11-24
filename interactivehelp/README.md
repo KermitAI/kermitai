@@ -70,3 +70,16 @@ Red still enforces built-in privileges and command checks. New staff commands
 can be added to an imported list by editing the JSON or with `helpmenu assign`.
 The owner-only Other Commands page remains the fallback for unassigned entries.
 
+
+## Embed layout
+
+Add optional `fields` and `footer` at the top level to edit the home embed.
+Each field takes `name`, `value`, and optional `inline` (defaults to false).
+Use `staff_help` to customize the Staff Help landing embed, and
+`staff_help.groups` for individual staff pages. Staff layouts accept
+`title`, `intro`, `fields`, and `footer`. Group pages keep their command
+list and append the page counter to the footer. The existing `staff`
+object still controls command assignments.
+
+Use up to 25 fields per embed. Field names can be up to 256 characters
+and values up to 1,024. The combined embed limit still applies.
