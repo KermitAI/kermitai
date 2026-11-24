@@ -197,6 +197,40 @@ class StreamToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.cfg["viewer_data"]["stream"], {})
         self.assertEqual(self.cfg["first_message"]["users"], {})
 
+    async def test_timer_edits_preserve_flags_and_unedited_fields(self):
+        self.cfg["timers"]["socials"] = {"seconds": 600, "message": "Old message", "enabled": False, "live_only": False}
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        await self.cog.timer_interval(ctx, "SOCIALS", 900)
+        self.assertEqual(self.cfg["timers"]["socials"], {"seconds": 900, "message": "Old message", "enabled": False, "live_only": False})
+        await self.cog.timer_message(ctx, "socials", message="Playing {game}")
+        self.assertEqual(self.cfg["timers"]["socials"]["seconds"], 900)
+        self.assertEqual(self.cfg["timers"]["socials"]["message"], "Playing {game}")
+        await self.cog.timer_edit(ctx, "socials", 1200, message="New message")
+        self.assertEqual(self.cfg["timers"]["socials"], {"seconds": 1200, "message": "New message", "enabled": False, "live_only": False})
+        await self.cog.timer_edit(ctx, "socials", 1500)
+        self.assertEqual(self.cfg["timers"]["socials"]["message"], "New message")
+        self.assertEqual(self.cfg["automation_revision"], 4)
+        self.assertTrue(self.cog.tools_wakeup.is_set())
+
+    async def test_invalid_or_missing_timer_edits_do_not_change_settings(self):
+        self.cfg["timers"]["socials"] = {"seconds": 600, "message": "Old", "enabled": True, "live_only": True}
+        before = copy.deepcopy(self.cfg["timers"])
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        await self.cog.timer_edit(ctx, "socials", 9, message="Changed")
+        await self.cog.timer_message(ctx, "socials", message="")
+        await self.cog.timer_edit(ctx, "missing", 600, message="Changed")
+        self.assertEqual(self.cfg["timers"], before)
+        self.assertEqual(self.cfg["automation_revision"], 0)
+
+    async def test_timer_view_displays_full_template_with_safe_pagination(self):
+        self.cfg["timers"]["socials"] = {"seconds": 600, "message": "x" * 4000, "enabled": True, "live_only": True}
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        await self.cog.timer_view(ctx, "socials")
+        self.assertEqual(ctx.send.await_count, 3)
+        self.assertTrue(all(len(call.args[0]) <= 1800 for call in ctx.send.call_args_list))
+        self.assertIn("x" * 4000, "".join(call.args[0] for call in ctx.send.call_args_list))
+        self.assertTrue(all(call.kwargs["suppress_embeds"] for call in ctx.send.call_args_list))
+
     async def test_timers_wait_an_interval_and_skip_offline_streams(self):
         self.cfg["timers"]["socials"] = {"seconds": 10, "enabled": True, "live_only": True, "message": "Follow us"}
         self.cog.tool_configs = {1: self.cfg}

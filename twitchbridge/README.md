@@ -1354,3 +1354,23 @@ Quote channel/settings are stored in Red Config. Submitted quote content,
 submitter username and UTC date/time persist in the configured Discord channel;
 this feature does not maintain a separate local quote database or delete those
 Discord posts on account unlinking.
+
+### Editing existing timers
+
+Discord moderators and above can edit an existing timer without replacing its
+enabled/live-only settings:
+```
+.twitchtimer interval socials 900
+.twitchtimer time socials 900
+.twitchtimer message socials Follow our socials! We're playing {game}.
+.twitchtimer edit socials 900 Follow our socials! We're playing {game}.
+.twitchtimer edit socials 900
+.twitchtimer view socials
+```
+`interval` (`time` alias) changes only the interval; `message` changes only the
+message. `edit <name> <seconds> [message]` updates both or leaves the message alone
+if omitted. Intervals remain 10-86400 seconds. Missing names and invalid values
+are rejected without creating/replacing a timer. Edits use the existing scheduler
+refresh: pending stale automation messages are invalidated and timer intervals
+restart. `view` shows the full saved message and settings without executing any
+variables. Existing enabled/liveonly/list/remove commands are unchanged.

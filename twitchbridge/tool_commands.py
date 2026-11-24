@@ -83,6 +83,55 @@ class ToolCommandsMixin:
         except ValueError as exc:
             await ctx.send(str(exc))
 
+    async def _timer_edit(self, ctx, name, *, seconds=None, message=None):
+        try:
+            name = tool_name(name)
+            if seconds is not None and not 10 <= seconds <= 86400:
+                raise ValueError("Timer interval must be 10-86400 seconds.")
+            if message is not None:
+                message = template_text(message)
+            def change(data):
+                if name not in data:
+                    raise ValueError("Timer not found. Use twitchtimer list to see existing timers.")
+                if seconds is not None:
+                    data[name]["seconds"] = seconds
+                if message is not None:
+                    data[name]["message"] = message
+            await self._edit_tools(ctx.guild, "timers", change)
+            await ctx.send(f"Timer `{name}` updated. Enabled and live-only settings were kept; scheduling restarts from the saved interval.")
+        except ValueError as exc:
+            await ctx.send(str(exc))
+
+    @twitchtimer.command(name="edit")
+    async def timer_edit(self, ctx, name: str, seconds: int, *, message: str = None):
+        """Edit an interval and optionally its message without resetting timer flags."""
+        await self._timer_edit(ctx, name, seconds=seconds, message=message)
+
+    @twitchtimer.command(name="interval", aliases=["time"])
+    async def timer_interval(self, ctx, name: str, seconds: int):
+        """Change only an existing timer's interval in seconds."""
+        await self._timer_edit(ctx, name, seconds=seconds)
+
+    @twitchtimer.command(name="message")
+    async def timer_message(self, ctx, name: str, *, message: str):
+        """Change only an existing timer's message."""
+        await self._timer_edit(ctx, name, message=message)
+
+    @twitchtimer.command(name="view")
+    async def timer_view(self, ctx, name: str):
+        try:
+            name = tool_name(name)
+            data = await self.config.guild(ctx.guild).timers()
+            if name not in data:
+                raise ValueError("Timer not found.")
+            item = data[name]
+            text = (f"{name}: {item['seconds']}s | enabled={item['enabled']} | live_only={item['live_only']}\n"
+                    + item["message"])
+            for offset in range(0, len(text), 1800):
+                await ctx.send(text[offset:offset + 1800], allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+
     @twitchtimer.command(name="enabled")
     async def timer_enabled(self, ctx, name: str, enabled: bool):
         await self._named_setting(ctx, "timers", name, "enabled", enabled)
