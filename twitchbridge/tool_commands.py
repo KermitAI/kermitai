@@ -385,6 +385,40 @@ class ToolCommandsMixin:
         await self._edit_tools(ctx.guild, "streak_settings", lambda data: data.update(enabled=enabled))
         await ctx.send("Stream streak tracking enabled." if enabled else "Stream streak tracking disabled.")
 
+    @twitchstreak.command(name="greeting")
+    async def streak_greeting(self, ctx, enabled: bool):
+        """Enable a separate first-message-per-stream streak greeting."""
+        await self._edit_tools(ctx.guild, "streak_settings", lambda data: data.update(greeting_enabled=enabled))
+        await ctx.send("Streak greetings enabled; streak tracking must also be enabled." if enabled else "Streak greetings disabled. Tracking settings were kept.")
+
+    @twitchstreak.command(name="message")
+    async def streak_message(self, ctx, *, message: str = None):
+        """View the streak response template, or replace it with new text."""
+        if message is None:
+            settings = await self.config.guild(ctx.guild).streak_settings()
+            text = settings.get("message", "Welcome back, {user}! Your stream streak is {streak}!")
+            for offset in range(0, len(text), 1800):
+                await ctx.send(text[offset:offset + 1800], allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
+            return
+        try:
+            message = template_text(message)
+            await self._edit_tools(ctx.guild, "streak_settings", lambda data: data.update(message=message))
+            await ctx.send("Streak response saved. It is used for streak greetings and !streak; new-viewer greetings were kept.")
+        except ValueError as exc:
+            await ctx.send(str(exc))
+
+    @twitchstreak.command(name="status")
+    async def streak_status(self, ctx):
+        cfg = await self.config.guild(ctx.guild).all()
+        settings = cfg.get("streak_settings", {})
+        viewers = cfg.get("viewer_data", {}).get(cfg["broadcaster_id"], {})
+        await ctx.send(f"Streak tracking: {settings.get('enabled', False)} | "
+                       f"Per-stream greetings: {settings.get('greeting_enabled', False)} | "
+                       f"Break on missed stream: {settings.get('break_on_miss', True)} | "
+                       f"Tracked viewers: {sum('streak' in data for data in viewers.values())} | "
+                       "View the response with twitchstreak message. New-viewer greetings are configured separately with twitchfirst.",
+                       allowed_mentions=discord.AllowedMentions.none())
+
     @twitchstreak.command(name="breakonmiss")
     @staff_only()
     async def streak_break(self, ctx, enabled: bool):

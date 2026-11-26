@@ -1383,3 +1383,38 @@ Lead Moderator badge. Both have moderator access in Paimon; broadcaster-only
 settings remain broadcaster-only. This applies to stream metadata updates,
 shoutouts, to-dos, ads, quotes and restricted custom/global commands. No new OAuth
 scope is needed for this badge-recognition fix.
+
+### Independent per-stream streak greetings
+
+Streak messages are now independent of the `twitchfirst` new-viewer greeting:
+```
+.twitchstreak enabled true
+.twitchstreak greeting true
+.twitchstreak message Welcome back, {user}! Your stream streak is {streak}!
+.twitchstreak status
+.twitchstreak message
+.twitchstreak view username
+```
+`greeting true/false` controls the once-per-stream first-chat streak greeting;
+tracking must also be enabled. Greetings default to off for existing setups until
+explicitly enabled. `message <text>` edits the shared streak response, while
+`message` without text displays its saved template. `status` shows tracking,
+greeting, break-on-miss settings and the number of tracked viewers. The existing
+`view <username>` still displays a specific viewer's stored count. All these
+Discord setup commands require moderator access or above.
+
+`!streak` uses the same custom streak message; everyone can request their own
+streak. The message supports shared response variables including `{user}`,
+`{streak}`, stream information, choices and counters. Automatic greetings capture
+the updated streak when that user's first message is observed. A durable marker
+prevents a second greeting in the same stream after cog reloads, message changes,
+or manual streak adjustments. Queue failures are not retried on every chat line.
+Messages are still subject to the normal automation queue, age and live-stream
+guards. Changing settings may invalidate queued messages.
+
+`twitchfirst` settings and its once-ever/per-user records remain untouched. If both
+features apply to a new viewer, both messages can be sent on their first stream;
+returning viewers receive only the streak greeting when `twitchfirst mode ever`
+is used. Offline messages do not produce streak greetings. Missed-stream behavior
+is still controlled by `.twitchstreak breakonmiss true|false`; attendance only
+counts live streams observed by Paimon and viewers who actually send chat.

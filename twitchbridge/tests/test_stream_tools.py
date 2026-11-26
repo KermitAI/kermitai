@@ -152,6 +152,85 @@ class StreamToolsTests(unittest.IsolatedAsyncioTestCase):
             await self.cog._ad_api(1, "POST", "channels/commercial", "channel:edit:commercial", body={"length": 60}, expected="foreign")
         self.cog._request.assert_not_awaited()
 
+    async def test_independent_streak_greeting_runs_once_each_stream_without_twitchfirst(self):
+        self.cfg["streak_settings"].update(enabled=True, greeting_enabled=True, message="{user} streak {streak}")
+        await self.cog._record_presence(1, "stream", self.event)
+        await self.cog._record_presence(1, "stream", self.event)
+        self.assertEqual(self.cog.tool_queue.qsize(), 1)
+        first = self.cog.tool_queue.get_nowait()[2]
+        self.assertEqual(first["kind"], "streak_greeting")
+        self.assertEqual(first["extra"]["streak"], 1)
+        self.assertNotIn("greeted", self.cfg["viewer_data"]["stream"]["viewer"])
+        self.live["stream"] = dict(self.live["stream"], id="s2", started_at="2026-11-27T12:00:00Z")
+        await self.cog._record_presence(1, "stream", self.event)
+        second = self.cog.tool_queue.get_nowait()[2]
+        self.assertEqual(second["extra"]["streak"], 2)
+        self.assertEqual(second["session"], "s2")
+
+    async def test_new_viewer_greeting_remains_once_ever_while_streak_repeats(self):
+        self.cfg["first_message"].update(enabled=True, mode="ever", message="New viewer!")
+        self.cfg["streak_settings"].update(enabled=True, greeting_enabled=True)
+        await self.cog._record_presence(1, "stream", self.event)
+        self.assertEqual(self.cog.tool_queue.qsize(), 2)
+        kinds = [self.cog.tool_queue.get_nowait()[2]["kind"] for _ in range(2)]
+        self.assertCountEqual(kinds, ["greeting", "streak_greeting"])
+        self.live["stream"] = dict(self.live["stream"], id="s2", started_at="2026-11-27T12:00:00Z")
+        await self.cog._record_presence(1, "stream", self.event)
+        self.assertEqual(self.cog.tool_queue.qsize(), 1)
+        self.assertEqual(self.cog.tool_queue.get_nowait()[2]["kind"], "streak_greeting")
+
+    async def test_streak_greeting_durable_marker_prevents_reloads_or_config_duplicates(self):
+        self.cfg["streak_settings"].update(enabled=True, greeting_enabled=True)
+        await self.cog._record_presence(1, "stream", self.event)
+        self.cog.presence_seen.clear()
+        self.cfg["automation_revision"] += 1
+        await self.cog._record_presence(1, "stream", self.event)
+        self.assertEqual(self.cog.tool_queue.qsize(), 1)
+        self.assertEqual(self.cfg["viewer_data"]["stream"]["viewer"]["streak"], 1)
+
+    async def test_streak_greeting_guards_disable_and_stream_changes(self):
+        self.cfg["streak_settings"].update(enabled=True, greeting_enabled=True)
+        await self.cog._record_presence(1, "stream", self.event)
+        item = self.cog.tool_queue.get_nowait()[2]
+        self.assertTrue(self.cog._tool_guard_allowed(self.cfg, item))
+        self.cfg["streak_settings"]["greeting_enabled"] = False
+        self.assertFalse(self.cog._tool_guard_allowed(self.cfg, item))
+        self.cfg["streak_settings"]["greeting_enabled"] = True
+        self.live["stream"] = dict(self.live["stream"], id="s2")
+        self.assertFalse(self.cog._tool_guard_allowed(self.cfg, item))
+
+    async def test_streak_greeting_is_opt_in_and_requires_live_tracking(self):
+        self.cfg["streak_settings"]["enabled"] = True
+        await self.cog._record_presence(1, "stream", self.event)
+        self.assertEqual(self.cog.tool_queue.qsize(), 0)
+        self.cfg["streak_settings"].update(enabled=False, greeting_enabled=True)
+        self.cog.presence_seen.clear()
+        await self.cog._record_presence(1, "stream", self.event)
+        self.assertEqual(self.cog.tool_queue.qsize(), 0)
+        self.cfg["streak_settings"]["enabled"] = True
+        self.live["stream"] = None
+        await self.cog._record_presence(1, "stream", self.event)
+        self.assertEqual(self.cog.tool_queue.qsize(), 0)
+
+    async def test_streak_message_status_and_greeting_settings_leave_first_message_intact(self):
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        before = copy.deepcopy(self.cfg["first_message"])
+        await self.cog.streak_message(ctx, message="Hello {user}: {streak}")
+        await self.cog.streak_greeting(ctx, True)
+        await self.cog.streak_message(ctx)
+        self.assertEqual(ctx.send.call_args.args[0], "Hello {user}: {streak}")
+        await self.cog.streak_status(ctx)
+        self.assertIn("Per-stream greetings: True", ctx.send.call_args.args[0])
+        self.assertEqual(self.cfg["first_message"], before)
+        saved = copy.deepcopy(self.cfg["streak_settings"])
+        await self.cog.streak_message(ctx, message="")
+        self.assertEqual(self.cfg["streak_settings"], saved)
+
+    async def test_twitch_streak_command_uses_custom_response(self):
+        self.cfg["streak_settings"].update(enabled=True, message="{user} has {streak} visits!")
+        await self.cog._tool_twitch_command(1, "stream", self.event, "streak", "")
+        self.assertEqual(self.cog._send_twitch.call_args.args[1], "Viewer has 1 visits!")
+
     async def test_streak_and_ever_greeting_only_count_once_per_stream(self):
         self.cfg["streak_settings"]["enabled"] = True
         self.cfg["first_message"]["enabled"] = True

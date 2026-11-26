@@ -221,6 +221,8 @@ class ResponseToolsMixin(ExtraVariablesMixin):
         if key in self.presence_seen:
             return
         template = None
+        streak_template = None
+        streak_count = 0
         async with self._tool_lock(guild_id):
             group = self.config.guild_from_id(guild_id)
             latest = await group.all()
@@ -229,7 +231,10 @@ class ResponseToolsMixin(ExtraVariablesMixin):
             viewers = latest.get("viewer_data", {})
             data = viewers.setdefault(broadcaster_id, {}).setdefault(uid, {})
             if streak.get("enabled"):
-                attendance(data, session["number"], streak.get("break_on_miss", True))
+                streak_count = attendance(data, session["number"], streak.get("break_on_miss", True))
+                if streak.get("greeting_enabled", False) and data.get("streak_greeted_stream") != stream["id"]:
+                    streak_template = streak.get("message", "Welcome back, {user}! Your stream streak is {streak}!")
+                    data["streak_greeted_stream"] = stream["id"]
             if first.get("enabled"):
                 eligible = not data.get("greeted") if first.get("mode", "ever") == "ever" else data.get("greeted_stream") != stream["id"]
                 template = first.get("users", {}).get(uid)
@@ -244,6 +249,11 @@ class ResponseToolsMixin(ExtraVariablesMixin):
             self.presence_seen[key] = None
             if len(self.presence_seen) > 20000:
                 self.presence_seen.pop(next(iter(self.presence_seen)))
+        if streak_template:
+            self._enqueue_tool(guild_id, broadcaster_id, "streak_greeting", "streak", streak_template,
+                user=event.get("chatter_user_name", "Viewer"), args=event.get("message", {}).get("text", ""),
+                twitch_id=uid, login=event.get("chatter_user_login"), extra={"streak": streak_count},
+                session=stream["id"], revision=cfg.get("automation_revision", 0), priority=1)
         if template:
             self._enqueue_tool(guild_id, broadcaster_id, "greeting", "firstmessage", template,
                 user=event.get("chatter_user_name", "Viewer"), args=event.get("message", {}).get("text", ""), twitch_id=uid, login=event.get("chatter_user_login"),

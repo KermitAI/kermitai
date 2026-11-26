@@ -12,7 +12,8 @@ from .policy import parse_command, twitch_level, chat_text
 from .tool_commands import ToolCommandsMixin
 
 FIRST_DEFAULTS = {"enabled": False, "mode": "ever", "everyone": True, "message": "Welcome {user}!", "users": {}}
-STREAK_DEFAULTS = {"enabled": False, "break_on_miss": True}
+STREAK_DEFAULTS = {"enabled": False, "break_on_miss": True, "greeting_enabled": False,
+                   "message": "Welcome back, {user}! Your stream streak is {streak}!"}
 
 
 class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
@@ -69,6 +70,10 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
             return False
         if kind == "greeting" and not cfg.get("first_message", {}).get("enabled"):
             return False
+        if kind == "streak_greeting":
+            settings = cfg.get("streak_settings", {})
+            if not settings.get("enabled") or not settings.get("greeting_enabled", False):
+                return False
         if payload.get("session"):
             info = self.stream_cache.get(payload["guild_id"], {})
             return (info.get("broadcaster_id") == payload["broadcaster_id"] and info.get("stream") is not None and info["stream"]["id"] == payload["session"]
@@ -246,7 +251,11 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
         elif name == "streak":
             await self._record_presence(gid, bid, event)
             data = (await self.config.guild_from_id(gid).viewer_data()).get(bid, {}).get(event["chatter_user_id"], {})
-            lines = [f"{event.get('chatter_user_name', 'Viewer')}: stream streak {data.get('streak', 0)}."]
+            settings = cfg.get("streak_settings", {})
+            template = settings.get("message", STREAK_DEFAULTS["message"])
+            lines = [await self._render_shared(gid, template, user=event.get("chatter_user_name", "Viewer"),
+                source="streak", twitch_id=event["chatter_user_id"], login=event.get("chatter_user_login"),
+                extra={"streak": data.get("streak", 0)}, truncate=True)]
         else:
             parts = args.split(maxsplit=1)
             action = parts[0].lower() if parts else "status"
