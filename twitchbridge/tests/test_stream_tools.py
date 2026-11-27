@@ -310,6 +310,72 @@ class StreamToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("x" * 4000, "".join(call.args[0] for call in ctx.send.call_args_list))
         self.assertTrue(all(call.kwargs["suppress_embeds"] for call in ctx.send.call_args_list))
 
+    def setup_stream_timer(self, elapsed):
+        from datetime import datetime, timezone
+        now = time.time()
+        self.live["stream"]["started_at"] = datetime.fromtimestamp(now - elapsed, timezone.utc).isoformat()
+        self.cfg["timers"]["care"] = {"seconds": 60, "message": "Take a break!", "enabled": True, "live_only": True, "per_stream": True}
+        self.cog.tool_configs = {1: self.cfg}
+
+    async def test_per_stream_timer_anchors_to_start_and_fires_once(self):
+        self.setup_stream_timer(59)
+        await self.cog._tick_tools()
+        self.assertEqual(self.cog.tool_queue.qsize(), 0)
+        self.setup_stream_timer(61)
+        await self.cog._tick_tools()
+        await self.cog._tick_tools()
+        self.assertEqual(self.cog.tool_queue.qsize(), 1)
+        item = self.cog.tool_queue.get_nowait()[2]
+        self.assertEqual(item["kind"], "stream_timer")
+        self.assertEqual(item["session"], "s1")
+        self.assertTrue(self.cog._tool_guard_allowed(self.cfg, item))
+        self.cog.stream_timer_claimed.clear()
+        await self.cog._tick_tools()
+        self.assertEqual(self.cog.tool_queue.qsize(), 0)
+
+    async def test_per_stream_timer_rearms_for_next_stream(self):
+        self.setup_stream_timer(61)
+        await self.cog._tick_tools()
+        self.live["stream"] = dict(self.live["stream"], id="s2")
+        await self.cog._tick_tools()
+        self.assertEqual(self.cog.tool_queue.qsize(), 2)
+        self.assertEqual(self.cfg["stream_timer_notices"]["stream"], {"s1": ["care"], "s2": ["care"]})
+
+    async def test_per_stream_timer_skips_overdue_offline_and_disabled(self):
+        self.setup_stream_timer(121)
+        await self.cog._tick_tools()
+        self.assertEqual(self.cog.tool_queue.qsize(), 0)
+        self.setup_stream_timer(61)
+        self.live["stream"] = None
+        await self.cog._tick_tools()
+        self.assertEqual(self.cog.tool_queue.qsize(), 0)
+
+    async def test_per_stream_toggle_and_edits_preserve_mode(self):
+        self.setup_stream_timer(0)
+        self.cfg["timers"]["care"]["per_stream"] = False
+        ctx = types.SimpleNamespace(guild=self.guild, send=AsyncMock())
+        await self.cog.timer_perstream(ctx, "care", True)
+        await self.cog.timer_edit(ctx, "care", 120, message="Updated reminder")
+        self.assertTrue(self.cfg["timers"]["care"]["per_stream"])
+        await self.cog.timer_perstream(ctx, "care", False)
+        self.assertFalse(self.cfg["timers"]["care"]["per_stream"])
+
+    async def test_stale_config_claim_does_not_suppress_valid_schedule(self):
+        self.setup_stream_timer(61)
+        self.assertIsNone(await self.cog._claim_stream_timer(1, "stream", "s1", "care", 999))
+        self.assertTrue(await self.cog._claim_stream_timer(1, "stream", "s1", "care", 0))
+        self.assertFalse(await self.cog._claim_stream_timer(1, "stream", "s1", "care", 0))
+
+    async def test_stream_timer_queued_message_is_rejected_if_mode_or_stream_changes(self):
+        self.setup_stream_timer(61)
+        await self.cog._tick_tools()
+        item = self.cog.tool_queue.get_nowait()[2]
+        self.cfg["timers"]["care"]["per_stream"] = False
+        self.assertFalse(self.cog._tool_guard_allowed(self.cfg, item))
+        self.cfg["timers"]["care"]["per_stream"] = True
+        self.live["stream"] = dict(self.live["stream"], id="s2")
+        self.assertFalse(self.cog._tool_guard_allowed(self.cfg, item))
+
     async def test_timers_wait_an_interval_and_skip_offline_streams(self):
         self.cfg["timers"]["socials"] = {"seconds": 10, "enabled": True, "live_only": True, "message": "Follow us"}
         self.cog.tool_configs = {1: self.cfg}

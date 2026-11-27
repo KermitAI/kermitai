@@ -1418,3 +1418,132 @@ returning viewers receive only the streak greeting when `twitchfirst mode ever`
 is used. Offline messages do not produce streak greetings. Missed-stream behavior
 is still controlled by `.twitchstreak breakonmiss true|false`; attendance only
 counts live streams observed by Paimon and viewers who actually send chat.
+
+### Owner-only Twitch custom commands
+
+The bot owner can identify one trusted Twitch account for owner-only commands:
+```
+.twitchset owneraccount your_twitch_username
+.twitchset owneraccount
+.twitchset clearowneraccount
+```
+The setting is global across linked streams. Paimon looks up the selected account
+through Twitch and saves its numeric user ID and last-known login. The bot owner's
+explicit selection assigns this identity; it does not perform a separate account
+ownership OAuth flow. Authorization uses the immutable ID on every incoming chat
+message, not display name, username text, Discord linking or channel role. It
+therefore continues working after a Twitch username change. Changing or clearing
+the setting takes effect immediately; an unset setting denies owner-only Twitch
+commands for everyone. Existing bot account authorization is used for the lookup,
+with no new OAuth scopes.
+
+Assign the permission to a local or global custom command:
+```
+.twitchcommand permission secret owner
+.twitchglobal permission secret owner
+```
+Only the configured account can use an owner-only command in Twitch, even as an
+ordinary viewer. Other moderators and broadcasters cannot run it. This permission
+does not grant moderator access to other built-ins. Existing platform settings,
+cooldowns, aliases, local/global precedence and paused-channel checks still apply.
+Owner commands are omitted from the public command list. For Discord-enabled local
+commands, `owner` means actual bot-owner access; guild ownership, moderator status
+and linking the configured Twitch identity do not qualify.
+
+Only the bot owner can assign the owner flag, edit/remove/reconfigure a command
+already marked owner, add/remove its aliases, or preview it. Other staff can still
+manage ordinary local commands. The global library remains bot-owner-only. Saved
+owner settings contain only the Twitch ID and last-known login, not tokens.
+
+### Personal owner arrival greeting
+
+The bot owner can configure a unique greeting for their saved owner Twitch account:
+```
+.twitchset owneraccount your_twitch_username
+.twitchset ownergreetingmessage My owner {user} has arrived! Paimon is reporting for duty!
+.twitchset ownergreeting true
+.twitchset ownergreeting
+.twitchset ownergreetingmessage
+```
+The greeting is global across enabled linked channels and matches the immutable
+Twitch owner ID. It triggers only on that account's first chat message per live
+stream: Twitch does not expose silent arrivals. It has its own durable per-stream
+receipt and works with `twitchfirst` and streak tracking disabled. Existing viewer
+and streak greetings remain independent and can also apply to the owner. Shared
+response variables are supported. The bare setup commands show the enable setting
+and saved message; `ownergreeting false` disables it. A cleared owner account or
+changed greeting invalidates queued owner greetings. No additional OAuth approval
+is needed. Normal queue/session age limits still apply; missed deliveries are not
+retried on every chat line.
+
+### One-shot Twitch countdown timers
+
+These are independent from repeating `.twitchtimer` messages:
+```
+!timer 30s Stretch your legs!
+!timer 5m Your tea is ready!
+!timer 1h Time for a break!
+!timer list
+!timer cancel <id>
+```
+Use a positive whole number followed by `s`, `m` or `h`, up to 24 hours. Paimon
+acknowledges with a timer ID and sends the supplied text once when time is up.
+Text is literal: viewer-supplied command variables are not expanded. Delivery is
+best effort after the countdown and may be delayed by chat rate limits. Timers
+may finish while a stream is offline, provided the same bridge remains enabled.
+
+Discord moderator+ configuration:
+```
+.twitchcountdown enabled true
+.twitchcountdown permission everyone
+.twitchcountdown status
+```
+Permission options: everyone (default), moderator or broadcaster. Countdown timers
+are enabled by default for linked channels. A viewer can have three pending timers
+per channel; the channel limit is 20 and total bot limit 200. Each viewer waits
+five seconds between creations. `list` shows your timers, or all channel timers
+for moderators/the configured owner. Anyone may cancel their own timers; channel
+moderators, broadcasters and the configured owner may cancel any channel timer.
+Access still follows the configured permission group. Disabling countdowns cancels
+pending timers in that channel. Pending timers are in memory and clear on bot
+restart/cog reload; they are not replayed later. Delivery rechecks the linked
+broadcaster, feature enable state, and cog availability. `timer` and
+`twitchcountdown` are reserved built-in names. The configured Twitch prefix applies.
+
+### Automatic care reminders once per stream
+
+Use a saved recurring timer in per-stream mode to send a reminder once at a fixed
+point after each live stream starts, automatically rearming on the next stream:
+```
+.twitchtimer add break 7200 Broadcaster care time! Take a break, stretch, and drink some water.
+.twitchtimer perstream break true
+.twitchtimer view break
+```
+This sends once two hours after Twitch's actual `started_at` timestamp. For a
+planned four-hour stream, that is the planned halfway point; Paimon cannot know
+the final length of a live stream. The reminder is configured per broadcaster,
+needs no manual Twitch command on each stream, and only sends while that same
+stream remains live. Add additional named timers for other care points.
+
+```
+.twitchtimer interval break 5400
+.twitchtimer message break Time for water and a stretch!
+.twitchtimer enabled break false
+.twitchtimer perstream break false
+```
+`perstream false` returns the timer to its normal repeating interval. Enabling
+per-stream mode also sets live-only true. Message/interval edits preserve the
+mode. Timer list/view displays `per_stream`. Setup remains Discord moderator+.
+
+Per-stream timers use the live start time rather than time since bot startup or
+configuration, so reloads before the due time retain the correct offset. Saved
+per-stream receipts prevent duplicate attempts after reloads; the most recent ten
+stream receipts per broadcaster are retained. A reminder more than 60 seconds
+overdue when Paimon observes it is skipped rather than replayed late. Within that
+window delivery is best effort through the normal rate-limited queue. A receipt
+is recorded before queueing, so failed/invalidated delivery is not replayed. A
+reminder already attempted in the stream is not repeated after message edits or
+manual re-enabling. The next new stream automatically starts a fresh schedule.
+
+These saved schedules survive reloads; manually started `!timer` countdowns remain
+one-shot, in-memory timers and are not converted into per-stream schedules.

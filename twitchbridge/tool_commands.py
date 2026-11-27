@@ -125,10 +125,27 @@ class ToolCommandsMixin:
             if name not in data:
                 raise ValueError("Timer not found.")
             item = data[name]
-            text = (f"{name}: {item['seconds']}s | enabled={item['enabled']} | live_only={item['live_only']}\n"
+            text = (f"{name}: {item['seconds']}s | enabled={item['enabled']} | live_only={item['live_only']} | per_stream={item.get('per_stream', False)}\n"
                     + item["message"])
             for offset in range(0, len(text), 1800):
                 await ctx.send(text[offset:offset + 1800], allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+
+    @twitchtimer.command(name="perstream")
+    async def timer_perstream(self, ctx, name: str, enabled: bool):
+        """Run once at the saved offset from each stream's actual start time."""
+        try:
+            name = tool_name(name)
+            def change(data):
+                if name not in data:
+                    raise ValueError("Timer not found. Create it with twitchtimer add first.")
+                data[name]["per_stream"] = enabled
+                if enabled:
+                    data[name]["live_only"] = True
+            await self._edit_tools(ctx.guild, "timers", change)
+            await ctx.send("Per-stream mode enabled: fires once at the saved offset after each stream starts, then rearms next stream." if enabled
+                           else "Per-stream mode disabled: this timer uses the normal repeating interval again.")
         except ValueError as exc:
             await ctx.send(str(exc))
 
@@ -147,7 +164,7 @@ class ToolCommandsMixin:
     @twitchtimer.command(name="list")
     async def timer_list(self, ctx):
         data = await self.config.guild(ctx.guild).timers()
-        for line in [f"{name}: {item['seconds']}s | enabled={item['enabled']} | live_only={item['live_only']}" for name, item in sorted(data.items())] or ["No timers configured."]:
+        for line in [f"{name}: {item['seconds']}s | enabled={item['enabled']} | live_only={item['live_only']} | per_stream={item.get('per_stream', False)}" for name, item in sorted(data.items())] or ["No timers configured."]:
             await ctx.send(line)
 
     @staff_only()

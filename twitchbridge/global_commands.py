@@ -75,8 +75,8 @@ class GlobalCommandsMixin:
     @twitchglobal.command(name="permission")
     async def global_permission(self, ctx, name: str, permission: str):
         permission = permission.lower()
-        if permission not in ("everyone", "moderator", "broadcaster"):
-            await ctx.send("Choose everyone, moderator, or broadcaster.")
+        if permission not in ("everyone", "moderator", "broadcaster", "owner"):
+            await ctx.send("Choose everyone, moderator, broadcaster, or owner.")
             return
         await self._global_setting(ctx, name, "permission", permission)
 

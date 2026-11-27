@@ -5,7 +5,7 @@ import types
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from test_bridge import module, policy
+from test_bridge import module, policy, Field as GlobalField
 
 
 class Field:
@@ -59,7 +59,7 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
                     "roles_enabled": True, "role_auth": {}, "command_prefix": "!"}
         self.group = Group(self.cfg)
         self.cog.config = types.SimpleNamespace(guild_from_id=lambda gid: self.group, guild=lambda guild: self.group,
-                                                 all_guilds=AsyncMock(return_value={1: self.cfg}))
+                                                 all_guilds=AsyncMock(return_value={1: self.cfg}), owner_twitch=GlobalField({}), owner_greeting=GlobalField({}))
         self.cog.settings_lock = asyncio.Lock()
         self.cog.command_locks = {}
         self.cog.pending_links = {}

@@ -21,6 +21,7 @@ from .ads import AD_DEFAULTS
 from .channel_edit import ChannelEditMixin, CHANNEL_COMMANDS
 from .global_commands import GlobalCommandsMixin
 from .quotes import QuotesMixin, QUOTE_DEFAULTS
+from .personal_tools import PersonalToolsMixin, OWNER_GREETING, COUNTDOWN_DEFAULTS
 
 BASE = "https://api.twitch.tv/helix/"
 AUTH = "https://id.twitch.tv/oauth2/"
@@ -28,13 +29,13 @@ SOCKET = "wss://eventsub.wss.twitch.tv/ws"
 SCOPES = " ".join(sorted(BOT_SCOPES))
 
 
-class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, CommunityMixin, commands.Cog):
+class TwitchBridge(PersonalToolsMixin, QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToolsMixin, ChannelEventsMixin, CommunityMixin, commands.Cog):
     """Connect Twitch broadcasters to Discord servers (bot owner only)."""
 
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=981376420016, force_registration=True)
-        self.config.register_global(bot_auth={}, global_commands={})
+        self.config.register_global(bot_auth={}, global_commands={}, owner_twitch={}, owner_greeting=copy.deepcopy(OWNER_GREETING))
         self.config.register_guild(broadcaster="", broadcaster_id="", broadcaster_auth={},
                                    chatlog=None, enabled=False, custom_commands={},
                                    announcements=None, command_prefix="!", announcement_color="primary",
@@ -43,10 +44,11 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                                    link_panel={}, link_panel_label="Link Twitch account",
                                    link_panel_text="Link your Twitch account to receive your server roles.",
                                    channel_events=copy.deepcopy(EVENT_DEFAULTS), automation_revision=0,
-                                   quote_settings=copy.deepcopy(QUOTE_DEFAULTS), timers={}, chat_triggers={}, response_counters={}, game_counters=[], todo_items=[], todo_permission="moderator",
+                                   stream_timer_notices={}, countdown_settings=copy.deepcopy(COUNTDOWN_DEFAULTS), quote_settings=copy.deepcopy(QUOTE_DEFAULTS), timers={}, chat_triggers={}, response_counters={}, game_counters=[], todo_items=[], todo_permission="moderator",
                                    ad_settings=copy.deepcopy(AD_DEFAULTS), ad_notices={}, ad_warning_pause_until=0,
                                    first_message=copy.deepcopy(FIRST_DEFAULTS), streak_settings=copy.deepcopy(STREAK_DEFAULTS),
                                    stream_session={}, viewer_data={})
+        self._init_personal_tools()
         self.http = None
         self.runner = None
         self.sender = None
@@ -103,7 +105,8 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
         for modal in list(self.link_modals):
             modal.stop()
         tasks = [self.runner, self.sender, self.command_worker, self.role_worker, self.event_sender, self.event_supervisor, self.tool_sender, self.tool_chat_worker, self.tool_monitor, self.tool_ticker,
-                 *self.event_tasks.values(), *self.auth_tasks.values(), *self.member_auth_tasks.values()]
+                 *self.event_tasks.values(), *self.auth_tasks.values(), *self.member_auth_tasks.values(),
+                 *(item["task"] for item in self.pending_countdowns.values())]
         for task in tasks:
             if task:
                 task.cancel()
@@ -417,6 +420,60 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
         """Owner-only Twitch setup. Authorization links arrive by DM."""
         await ctx.send_help()
 
+    @twitchset.command(name="ownergreeting")
+    async def owner_greeting_enabled(self, ctx, enabled: bool = None):
+        settings = {**OWNER_GREETING, **await self.config.owner_greeting()}
+        if enabled is not None:
+            if enabled and not (await self.config.owner_twitch()).get("user_id"):
+                await ctx.send("Configure twitchset owneraccount first.")
+                return
+            settings["enabled"] = enabled
+            await self.config.owner_greeting.set(settings)
+        await ctx.send(f"Personal owner greeting enabled: {settings['enabled']}. Triggers on your first message per live stream.")
+
+    @twitchset.command(name="ownergreetingmessage")
+    async def owner_greeting_message(self, ctx, *, message: str = None):
+        settings = {**OWNER_GREETING, **await self.config.owner_greeting()}
+        if message is None:
+            for offset in range(0, len(settings["message"]), 1800):
+                await ctx.send(settings["message"][offset:offset + 1800], allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
+            return
+        try:
+            settings["message"] = template_text(message)
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+        await self.config.owner_greeting.set(settings)
+        await ctx.send("Personal owner greeting message saved for all linked streams.")
+
+    @twitchset.command(name="owneraccount")
+    @commands.is_owner()
+    async def owner_account(self, ctx, username: str = None):
+        """Set/show the single global Twitch account allowed to use owner commands."""
+        if username is None:
+            owner = await self.config.owner_twitch()
+            text = (f"Owner Twitch account: @{owner['login']} (ID {owner['user_id']})."
+                    if owner else "No owner Twitch account configured. Owner-only Twitch commands are blocked.")
+            await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
+            return
+        try:
+            identity = await self._lookup_twitch(username)
+            if not str(identity.get("id", "")).isdigit():
+                raise BridgeError("Twitch did not return a valid account ID.")
+            async with self.settings_lock:
+                await self.config.owner_twitch.set({"user_id": str(identity["id"]), "login": identity["login"]})
+            await ctx.send(f"Owner Twitch account set to @{identity['login']} (ID {identity['id']}) across all linked streams.",
+                           allowed_mentions=discord.AllowedMentions.none())
+        except (BridgeError, ValueError) as exc:
+            await ctx.send(str(exc))
+
+    @twitchset.command(name="clearowneraccount")
+    @commands.is_owner()
+    async def clear_owner_account(self, ctx):
+        async with self.settings_lock:
+            await self.config.owner_twitch.set({})
+        await ctx.send("Owner Twitch account cleared. Owner-only Twitch commands are now blocked.")
+
     @twitchset.command(name="link")
     async def link(self, ctx, broadcaster: str):
         """Select a broadcaster; ownership must still be authorized."""
@@ -563,7 +620,7 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
     def _command_lock(self, guild_id):
         return self.command_locks.setdefault(guild_id, asyncio.Lock())
 
-    async def _prepare_command(self, guild_id, name, args, platform, level, user, broadcaster_id=None, twitch_id=None, twitch_login=None):
+    async def _prepare_command(self, guild_id, name, args, platform, level, user, broadcaster_id=None, twitch_id=None, twitch_login=None, discord_owner=False):
         async with self._command_lock(guild_id):
             cfg = await self.config.guild_from_id(guild_id).all()
             if not cfg["enabled"] or (broadcaster_id is not None and cfg["broadcaster_id"] != broadcaster_id):
@@ -574,7 +631,14 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
             if record is None and platform == "twitch":
                 name, record = resolve_custom_command(await self._global_records(), requested_name)
                 scope = "global"
-            if not record or not command_allowed(record, platform, level):
+            is_owner = False
+            if record and record.get("permission") == "owner":
+                if platform == "twitch":
+                    owner = await self.config.owner_twitch()
+                    is_owner = bool(twitch_id and owner.get("user_id") and str(twitch_id) == str(owner["user_id"]))
+                elif platform == "discord":
+                    is_owner = discord_owner
+            if not record or not command_allowed(record, platform, level, is_owner=is_owner):
                 return None
             key = (guild_id, "global:" + name if scope == "global" else name)
             now = time.monotonic()
@@ -588,7 +652,7 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                     self.cooldowns.pop(old, None)
             return text
 
-    async def _send_twitch(self, guild_id, text, expected_broadcaster=None, *, announcement=False, event_guard=None, automation_guard=None):
+    async def _send_twitch(self, guild_id, text, expected_broadcaster=None, *, announcement=False, event_guard=None, automation_guard=None, countdown_guard=None):
         text = chat_text(text)
         # Stay below the normal 20 messages/30 sec chat limit across all channels.
         async with self.send_lock:
@@ -616,6 +680,17 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                 cfg = await self.config.guild_from_id(guild_id).all()
                 if cfg["broadcaster_id"] != expected_broadcaster or not self._event_delivery_allowed(cfg, *event_guard):
                     raise BridgeError("This event's settings changed before it could be sent.")
+            if automation_guard is not None and automation_guard.get("kind") == "owner_greeting":
+                if not await self._owner_greeting_allowed(automation_guard):
+                    raise BridgeError("Owner greeting settings changed before delivery.")
+            if countdown_guard is not None:
+                cfg = await self.config.guild_from_id(guild_id).all()
+                if not cfg["enabled"] or cfg["broadcaster_id"] != expected_broadcaster:
+                    raise BridgeError("The countdown destination changed before delivery.")
+                key = (guild_id, countdown_guard["id"])
+                if (self.pending_countdowns.get(key) is not countdown_guard
+                        or not cfg.get("countdown_settings", {}).get("enabled", True)):
+                    raise BridgeError("Countdown was cancelled or disabled before delivery.")
             if cfg["broadcaster_auth"].get("client_id") != client_id:
                 raise BridgeError("Authorize the broadcaster for this application first.")
             if announcement:
@@ -671,6 +746,13 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                     continue
                 if parsed[0] in PUBLIC_COMMAND_LIST:
                     await self._public_command_list(guild_id, broadcaster_id)
+                    continue
+                if parsed[0] == "timer":
+                    try:
+                        text = await self._countdown_command(guild_id, broadcaster_id, event, parsed[1])
+                    except (BridgeError, ValueError) as exc:
+                        text = str(exc)
+                    await self._send_twitch(guild_id, text, expected_broadcaster=broadcaster_id)
                     continue
                 if parsed[0] == "quote":
                     try:
@@ -740,7 +822,8 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
             cfg = await self.config.guild(message.guild).all()
             linked = cfg.get("member_links", {}).get(str(message.author.id), {})
             text = await self._prepare_command(message.guild.id, *parsed, "discord", level, message.author.display_name,
-                                               twitch_id=linked.get("twitch_id"), twitch_login=linked.get("login"))
+                                               twitch_id=linked.get("twitch_id"), twitch_login=linked.get("login"),
+                                               discord_owner=await self.bot.is_owner(message.author))
             if text:
                 await message.channel.send(text, allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
         except (BridgeError, ValueError, discord.HTTPException) as exc:
@@ -772,6 +855,14 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                 records[name] = {"response": response, "platform": "twitch", "permission": "everyone", "cooldown": 5}
         await ctx.send(f"Command `{name}` added for Twitch. Use twitchcommand platform to enable it in Discord too.")
 
+    async def _may_manage_custom(self, ctx, record, *, setting_owner=False):
+        if record.get("permission") != "owner" and not setting_owner:
+            return True
+        if await self.bot.is_owner(ctx.author):
+            return True
+        await ctx.send("Only the bot owner can assign, modify, remove or preview owner-only commands.")
+        return False
+
     async def _edit_command(self, ctx, name, field, value):
         try:
             name = command_name(name)
@@ -783,6 +874,8 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                 name, record = resolve_custom_command(records, name)
                 if record is None:
                     await ctx.send("Command not found.")
+                    return
+                if not await self._may_manage_custom(ctx, record, setting_owner=field == "permission" and value == "owner"):
                     return
                 if field == "platform" and value in ("discord", "both"):
                     conflicts = [candidate for candidate in [name, *record.get("aliases", [])]
@@ -812,6 +905,8 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
         canonical, record = resolve_custom_command(records, requested)
         if record is None:
             await ctx.send("Global command not found." if global_scope else "Local custom command not found. Use twitchglobal preview for global commands.")
+            return
+        if not await self._may_manage_custom(ctx, record):
             return
         author = getattr(ctx, "author", None)
         linked = cfg.get("member_links", {}).get(str(getattr(author, "id", "")), {})
@@ -844,10 +939,10 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
 
     @twitchcommand.command(name="permission")
     async def command_permission(self, ctx, name: str, permission: str):
-        """Choose everyone, moderator, or broadcaster."""
+        """Choose everyone, moderator, broadcaster, or owner."""
         permission = permission.lower()
-        if permission not in ("everyone", "moderator", "broadcaster"):
-            await ctx.send("Choose everyone, moderator, or broadcaster.")
+        if permission not in ("everyone", "moderator", "broadcaster", "owner"):
+            await ctx.send("Choose everyone, moderator, broadcaster, or owner.")
             return
         await self._edit_command(ctx, name, "permission", permission)
 
@@ -868,6 +963,8 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                 canonical, record = resolve_custom_command(records, name)
                 if record is None:
                     reply = "Command not found."
+                elif not await self._may_manage_custom(ctx, record):
+                    return
                 elif name != canonical:
                     record["aliases"].remove(name)
                     reply = f"Alias `{name}` removed. The original command remains."
@@ -920,6 +1017,8 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                 if record is None:
                     await ctx.send("Command not found. Create it with twitchcommand add first.")
                     return
+                if not await self._may_manage_custom(ctx, record):
+                    return
                 if record.get("platform", "twitch") in ("discord", "both") and self.bot.get_command(alias):
                     await ctx.send("That alias belongs to a registered Discord command. Choose another alias or set this command to Twitch-only first.")
                     return
@@ -944,6 +1043,8 @@ class TwitchBridge(QuotesMixin, GlobalCommandsMixin, ChannelEditMixin, StreamToo
                 canonical, record = resolve_custom_command(records, alias)
                 if record is None:
                     reply = "Alias not found."
+                elif not await self._may_manage_custom(ctx, record):
+                    return
                 elif canonical == alias:
                     reply = "That is the original command name. Use twitchcommand remove to delete the command."
                 else:

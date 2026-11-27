@@ -54,7 +54,7 @@ def log_line(event, timestamp):
 
 PUBLIC_COMMAND_LIST = {"twitchcommands", "tcommands", "tcmds"}
 
-RESERVED_COMMANDS = PUBLIC_COMMAND_LIST | {"quote", "twitchquote","twitchglobal","twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout", "todo", "ads", "streak", "twitchtodo", "twitchads", "twitchtimer", "twitchtrigger", "twitchcounter", "twitchfirst", "twitchstreak", "tstream", "title", "game", "category", "tags", "language"}
+RESERVED_COMMANDS = PUBLIC_COMMAND_LIST | {"timer", "twitchcountdown","quote", "twitchquote","twitchglobal","twitchset", "twitchcommand", "twitchannounce", "twitchlink", "twitchroles", "twitchshoutout", "link", "so", "shoutout", "todo", "ads", "streak", "twitchtodo", "twitchads", "twitchtimer", "twitchtrigger", "twitchcounter", "twitchfirst", "twitchstreak", "tstream", "title", "game", "category", "tags", "language"}
 
 
 def command_name(value):
@@ -101,11 +101,14 @@ def twitch_level(event):
     return 1 if any(badge.get("set_id") in {"moderator", "lead_moderator"} for badge in event.get("badges", [])) else 0
 
 
-def command_allowed(record, platform, level):
+def command_allowed(record, platform, level, *, is_owner=False):
+    if record.get("platform", "twitch") not in (platform, "both"):
+        return False
+    permission = record.get("permission", "everyone")
+    if permission == "owner":
+        return bool(is_owner)
     required = {"everyone": 0, "moderator": 1, "broadcaster": 2}
-    return (record.get("platform", "twitch") in (platform, "both")
-            and record.get("permission", "everyone") in required
-            and level >= required[record.get("permission", "everyone")])
+    return permission in required and level >= required[permission]
 
 
 def twitch_target(value):

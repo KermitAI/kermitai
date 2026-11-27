@@ -2,6 +2,7 @@
 import asyncio
 import math
 import time
+from datetime import datetime
 import discord
 
 from .ads import AdsMixin, AD_DEFAULTS
@@ -27,6 +28,7 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
         self.tool_serial = 0
         self.tool_status, self.tool_dropped = {}, 0
         self.timer_due, self.trigger_due, self.presence_seen = {}, {}, {}
+        self.stream_timer_claimed = set()
         self.ad_cache, self.ad_locks, self.ad_retry_after = {}, {}, {}
         self.ad_pending, self.ad_claimed = set(), set()
         self.ad_pause_until = {}
@@ -64,6 +66,10 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
                     and time.time() >= cfg.get("ad_warning_pause_until", 0)
                     and schedule.get("next_ad_at") == payload["ad_at"] and time.time() < payload["ad_at"]
                     and time.monotonic() - schedule.get("fetched", 0) < 45)
+        if kind == "stream_timer":
+            timer = cfg.get("timers", {}).get(payload["name"], {})
+            if not timer.get("enabled") or not timer.get("per_stream", False):
+                return False
         if kind == "timer" and not cfg.get("timers", {}).get(payload["name"], {}).get("enabled"):
             return False
         if kind == "trigger" and not cfg.get("chat_triggers", {}).get(payload["name"], {}).get("enabled"):
@@ -87,6 +93,9 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
             try:
                 cfg = await self.config.guild_from_id(gid).all()
                 if not self._tool_guard_allowed(cfg, item):
+                    self.tool_dropped += 1
+                    continue
+                if item["kind"] == "owner_greeting" and not await self._owner_greeting_allowed(item):
                     self.tool_dropped += 1
                     continue
                 extra = dict(item.get("extra", {}))
@@ -140,6 +149,28 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
             except asyncio.TimeoutError:
                 pass
 
+    async def _claim_stream_timer(self, gid, bid, session, name, revision):
+        async with self._tool_lock(gid):
+            group = self.config.guild_from_id(gid)
+            cfg = await group.all()
+            timer = cfg.get("timers", {}).get(name, {})
+            if (not cfg["enabled"] or cfg["broadcaster_id"] != bid
+                    or cfg.get("automation_revision", 0) != revision
+                    or not timer.get("enabled") or not timer.get("per_stream", False)):
+                return None
+            notices = cfg.get("stream_timer_notices", {})
+            sessions = notices.setdefault(bid, {})
+            names = sessions.setdefault(session, [])
+            if name in names:
+                return False
+            names.append(name)
+            while len(sessions) > 10:
+                sessions.pop(next(iter(sessions)))
+            while len(notices) > 10:
+                notices.pop(next(iter(notices)))
+            await group.stream_timer_notices.set(notices)
+            return True
+
     async def _tick_tools(self):
         now = time.monotonic()
         for gid, cfg in list(self.tool_configs.items()):
@@ -148,6 +179,29 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
             stream = info.get("stream") if info.get("broadcaster_id") == bid and now - info.get("fetched", 0) < 60 else None
             for name, timer in cfg.get("timers", {}).items():
                 if not timer.get("enabled") or (timer.get("live_only", True) and stream is None):
+                    continue
+                if timer.get("per_stream", False):
+                    if stream is None:
+                        continue
+                    claim = (gid, bid, stream["id"], name)
+                    if claim in self.stream_timer_claimed:
+                        continue
+                    try:
+                        started = datetime.fromisoformat(stream["started_at"].replace("Z", "+00:00"))
+                        if started.tzinfo is None:
+                            continue
+                        due_at = started.timestamp() + timer["seconds"]
+                    except (KeyError, ValueError, TypeError):
+                        continue
+                    lateness = time.time() - due_at
+                    if lateness < 0 or lateness > 60:
+                        continue
+                    claimed = await self._claim_stream_timer(gid, bid, stream["id"], name, rev)
+                    if claimed is not None:
+                        self.stream_timer_claimed.add(claim)
+                    if claimed:
+                        self._enqueue_tool(gid, bid, "stream_timer", name, timer["message"],
+                                           session=stream["id"], revision=rev)
                     continue
                 session = stream["id"] if timer.get("live_only", True) else None
                 key = (gid, bid, rev, name, session)
@@ -167,6 +221,10 @@ class StreamToolsMixin(ToolCommandsMixin, ResponseToolsMixin, AdsMixin):
                     self.ad_claimed.update((gid, bid, at, value) for value in candidates)
                     self._enqueue_tool(gid, bid, "ad", "ads", cfg["ad_settings"].get("message", AD_DEFAULTS["message"]),
                         priority=0, session=stream["id"], revision=rev, ad_at=at, lead=lead)
+        if len(self.stream_timer_claimed) > 10000:
+            active = {(gid, info.get("broadcaster_id"), info["stream"]["id"])
+                      for gid, info in self.stream_cache.items() if info.get("stream")}
+            self.stream_timer_claimed = {key for key in self.stream_timer_claimed if key[:3] in active}
         if len(self.timer_due) > 10000:
             self.timer_due = {k: due for k, due in self.timer_due.items() if due > now - 3600}
         if len(self.ad_claimed) > 10000:

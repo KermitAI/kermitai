@@ -1,7 +1,7 @@
 from .twitchbridge import TwitchBridge
 
 __red_end_user_data_statement__ = (
-    "Stores broadcaster IDs, usernames, bot and broadcaster role-sync OAuth tokens, "
+    "Stores the owner-selected Twitch ID and last-known login for owner-only commands, broadcaster IDs, usernames, bot and broadcaster role-sync OAuth tokens, "
     "Discord destination and role IDs, verified per-server Discord/Twitch member links, "
     "link timestamps, linking panel IDs, automation settings, to-do text, counters, "
     "ad-warning receipts, Twitch attendance/greeting history, and a ledger of integration-granted roles. Pending verification "

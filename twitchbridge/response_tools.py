@@ -209,7 +209,10 @@ class ResponseToolsMixin(ExtraVariablesMixin):
         cfg = await self.config.guild_from_id(guild_id).all()
         first = cfg.get("first_message", {})
         streak = cfg.get("streak_settings", {})
-        if not cfg["enabled"] or cfg["broadcaster_id"] != broadcaster_id or not (first.get("enabled") or streak.get("enabled")):
+        if not cfg["enabled"] or cfg["broadcaster_id"] != broadcaster_id:
+            return
+        await self._record_owner_greeting(guild_id, broadcaster_id, event)
+        if not (first.get("enabled") or streak.get("enabled")):
             return
         info = await self._stream_info(guild_id)
         if not info["stream"] or info["broadcaster_id"] != broadcaster_id:
